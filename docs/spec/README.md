@@ -10,6 +10,7 @@ loom-harness 是一个云端 Agent 与上下文管理服务。外部应用可定
 | Session、Run、Event 分别属于谁？不同调用怎样关联？ | [领域概念](concepts/domain.md) |
 | 哪些状态必须能恢复？哪些能力适合做成插件？ | [设计原则](principles/design.md) |
 | Run 何时交付、等待或主动续跑？历史压缩后，工具回执如何唤醒原 Run？ | [运行架构与时序](architecture/runtime.md) |
+| 首个工具回执丢失后，换 worker 怎样找回原作业？ | [工具恢复能力](reference/contracts.md#外部工具的恢复能力) |
 | 外部应用和插件作者可以依赖哪些契约？接口与事件名确定到什么程度？ | [接口、工具和事件参考](reference/contracts.md) |
 
 需要追溯设计取舍时，阅读[当前设计共识](../goal-shaping/current/loom-agent/design.md)。[首轮归档总览](../goal-shaping/archive/loom-agent/2026-11-23-initial/overview.md)保留了首轮接口和运行职责清单。[首轮讨论笔记](../goal-shaping/archive/loom-agent/2026-11-23-initial/notes.md)记录采纳、暂缓和未决事项。后续确认的普通交办结束条件及 Goal 插件职责见[2026-11-24 补充归档](../goal-shaping/archive/loom-agent/2026-11-24-goal-continuation/design.md)。

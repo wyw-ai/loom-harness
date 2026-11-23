@@ -27,3 +27,7 @@ Codex 的出站请求测试表明，自动续跑可沿用已有的目标上下�
 Codex 还覆盖了压缩与用户改口同时发生的情况。测试先固定压缩输入，再受理用户清除 Goal，最后核对替换后的历史和持久化记录中仍然保留这次清除。[并发清除 Goal 的测试](https://github.com/openai/codex/blob/8b02797a2ea1feaca69242db7e13581553c0da70/codex-rs/core/src/session/tests.rs#L6060-L6094) · [持久化断言](https://github.com/openai/codex/blob/8b02797a2ea1feaca69242db7e13581553c0da70/codex-rs/core/src/session/tests.rs#L6136-L6149)
 
 loom-harness 采纳的约定是每次为有效 Goal 构建主模型请求时都从原 Run 取回完整目标和完成条件。压缩后沿用这项要求。若回执唤醒原 Run，模型直接依据回执与目标判断。仅 Goal 主动续跑的轮次追加内部说明。压缩期间受理的改口或取消须在派发前核对，不可恢复的失败停止自动续跑并留下原因。[本次设计](design.md)
+
+## CI 首个受理回执丢失
+
+这次反例把中断提前到 CI 已创建作业、worker 还没保存作业号的时候。核对的 Codex 远端命令路径在启动确认前断线会报告错误，并尝试按进程标识清理。loom-harness 的设计按各外部服务实际支持的查询和幂等能力核实原调用。已将四种恢复分支与迟到、重复回执的验收补入工具层归档，同时明确 Goal 不会因缺少受理回执而新建提交。[Codex 处理启动回包](https://github.com/openai/codex/blob/8b02797a2ea1feaca69242db7e13581553c0da70/codex-rs/exec-server/src/client.rs#L1230-L1261) · [loom-harness 的恢复分支](../2026-11-23-initial/tools.md#lost-acceptance-receipt)
