@@ -4,6 +4,8 @@
 
 [领域模型](#domain-model) · [REST API](#rest-api) · [官方插件](#official-plugins) · [扩展点](#extension-points) · [官方工具](#official-tools) · [事件目录](#official-events) · [插件订阅表](#plugin-subscriptions) · [Rust 宿主订阅表](#host-subscriptions)
 
+2026-11-24 补充归档了[普通交办与 Goal 主动续跑](../2026-11-24-goal-continuation/design.md)。[讨论笔记](../2026-11-24-goal-continuation/notes.md)保留了源码依据。
+
 **用一条构建报告读这份总览。** 构建系统上报一条 Event。投递安排的 Lua 规则可以给出两项决定：把原报告留给项目 Session，再请值班 Agent 排查。宿主为每项分别入箱。第一项只登记材料，第二项可产生 Run。Run 如需推理，触发插件判断时机，上下文构建插件挑选输入，模型执行器发请求。可从投递安排查到每项送达结果，再沿已创建的 Run 查模型和工具调用。
 
 ```mermaid
