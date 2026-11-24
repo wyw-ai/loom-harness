@@ -7,6 +7,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::time::Duration;
 
+mod compaction;
 #[cfg(test)]
 mod recovery_tests;
 mod tools;
@@ -548,35 +549,28 @@ async fn step(app: &App, w: &Work) -> Result<()> {
         }
         let key = format!("model:{step}:{}:{name}", inputs.len());
         let previous = prior_calls.iter().find(|c| c["call_key"] == key);
-        let limit = agent["context_bytes"].as_u64().unwrap_or(256_000) as usize;
+        let limit = context::context_limit(agent) as usize;
         let mut covered = Vec::new();
         let mut covered_events = Vec::new();
         let mut compaction_revision = Value::Null;
-        if previous.is_none() && context::input_bytes(&messages) > limit {
-            let compact = app
-                .catalog
-                .compaction_prompt()
-                .map_err(anyhow::Error::msg)?
-                .context("required input exceeds budget and compaction is disabled")?;
-            let summary = context::compact(
-                &app.http,
-                &provider.route(),
-                &messages,
-                limit,
-                s(&compact, "prompt")?,
-            )
-            .await
-            .map_err(|e| anyhow!(e.to_string()))?;
-            compaction_revision = compact["revision"].clone();
-            for (start, end) in &summary.covered {
-                covered_events.extend(
-                    messages[*start..*end]
-                        .iter()
-                        .filter_map(|m| m.get("source_event_id").cloned()),
-                );
-            }
-            messages = summary.messages;
-            covered = summary.covered;
+        let before_bytes = context::input_bytes(&messages);
+        if previous.is_none() && before_bytes > limit {
+            let mut request = json!({"call_key":format!("compact:{key}"),"model":name,"provider_model":provider.model,
+                "reason":"compaction","ctx_snapshot":{"limit_bytes":limit,"used_bytes":before_bytes,"before_bytes":before_bytes}});
+            let (revision, plan) = compaction::plan(app, w, &request, &messages)?;
+            let (start, end) = plan.range;
+            request["compaction_revision"] = revision.clone();
+            request["range"] = json!([start, end]);
+            let shortened =
+                compaction::run(app, w, provider, request, &plan, &messages, limit).await?;
+            compaction_revision = revision;
+            covered_events.extend(
+                messages[start..end]
+                    .iter()
+                    .filter_map(|m| m.get("source_event_id").cloned()),
+            );
+            covered.push((start, end));
+            messages = shortened;
         }
         let call = if let Some(old) = previous {
             old.clone()
@@ -586,7 +580,14 @@ async fn step(app: &App, w: &Work) -> Result<()> {
             } else {
                 directory.as_slice()
             };
-            let req = json!({"call_key":key,"model":name,"provider_model":provider.model,"reason":reason,"messages":messages,"compressed_ranges":covered,"compressed_events":covered_events,"compaction_revision":compaction_revision,"tools":schema,"tool_directory":offered_directory,"goal_policy":policy,"status":"pending"});
+            let used_bytes = if covered.is_empty() {
+                before_bytes
+            } else {
+                context::input_bytes(&messages)
+            };
+            let req = json!({"call_key":key,"model":name,"provider_model":provider.model,"reason":reason,"messages":messages,
+                "ctx_snapshot":{"limit_bytes":limit,"used_bytes":used_bytes,"before_bytes":(!covered.is_empty()).then_some(before_bytes)},
+                "compressed_ranges":covered,"compressed_events":covered_events,"compaction_revision":compaction_revision,"tools":schema,"tool_directory":offered_directory,"goal_policy":policy,"status":"pending"});
             app.db.record_call(w, "model_call", req)?
         };
         if call["status"] == "completed" {
@@ -635,7 +636,7 @@ async fn step(app: &App, w: &Work) -> Result<()> {
                     w,
                     "model_call",
                     cid,
-                    json!({"status":"failed","error":last_error}),
+                    json!({"status":"failed","error":last_error,"usage":reply.usage,"timing":reply.timing}),
                 )?;
             }
             Err(e) => {

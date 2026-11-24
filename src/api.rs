@@ -349,6 +349,15 @@ async fn route(
             }
             Ok(item)
         }
+        ("GET", ["runs", r, "usage"]) => Ok(db.run_usage(o, r)?),
+        ("GET", ["sessions", s, "usage"]) => {
+            let session = db.get(o, "session", s)?;
+            let agent = session["agent_id"]
+                .as_str()
+                .and_then(|id| app.catalog.get_agent(o, who.admin, id).ok())
+                .unwrap_or(Value::Null);
+            Ok(db.session_usage(o, &session, &agent)?)
+        }
         ("GET", ["sessions", s, "runs"]) => {
             db.get(o, "session", s)?;
             Ok(db.list(o, "run", Some(s))?)
@@ -575,6 +584,9 @@ async fn suggestion(app: &App, who: &Identity, s: &str, body: &Value) -> ApiResu
     else {
         return Ok(empty);
     };
+    let Some(prompt) = plugin["prompt"].as_str().filter(|p| !p.trim().is_empty()) else {
+        return Ok(empty);
+    };
     if !app.db.reserve_suggestion(
         owner,
         subject,
@@ -596,19 +608,21 @@ async fn suggestion(app: &App, who: &Identity, s: &str, body: &Value) -> ApiResu
     let messages = crate::engine::chat_history(&visible);
     let timeout =
         std::time::Duration::from_millis(access["timeout_ms"].as_u64().unwrap_or(15000).min(60000));
-    let guess = tokio::time::timeout(
+    let sample_id = app.db.start_suggestion_usage(owner, s)?;
+    let sample = tokio::time::timeout(
         timeout,
-        context::suggest(
-            &app.http,
-            &route,
-            &messages,
-            plugin["prompt"].as_str().unwrap_or(""),
-        ),
+        context::suggest(&app.http, &route, &messages, prompt),
     )
     .await
     .ok()
     .and_then(Result::ok)
     .flatten();
+    let (guess, usage, timing) = match sample {
+        Some(sample) => (sample.text, sample.usage, json!(sample.timing)),
+        None => (None, Value::Null, Value::Null),
+    };
+    app.db
+        .finish_suggestion_usage(owner, &sample_id, usage, timing)?;
     let fresh = app
         .db
         .history(owner, s)?

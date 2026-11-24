@@ -35,6 +35,8 @@ const RUN_FIXED: &[&str] = &[
     "created_at",
     "status",
     "progress_message",
+    "admitted_us",
+    "finished_us",
 ];
 const CALL_FIXED: &[&str] = &[
     "id",
@@ -241,6 +243,9 @@ impl Store {
             }
             merge(&mut run, &patch, RUN_FIXED)?;
             run["status"] = json!(status);
+            if terminal(&run["status"]) {
+                run["finished_us"] = json!(chrono::Utc::now().timestamp_micros());
+            }
             if patch.get("progress_message").is_some()
                 || patch["progress_requested"] == false
                 || terminal(&run["status"])
@@ -292,7 +297,7 @@ impl Store {
     }
     pub fn record_call(&self, work: &Work, kind: &str, mut body: Value) -> Result<Value> {
         let kind = kind_name(kind)?;
-        if !matches!(kind, "model_call" | "tool_call") {
+        if !matches!(kind, "model_call" | "tool_call" | "compaction_call") {
             return Err(StoreError::Invalid("expected call kind".into()));
         }
         expect_object(&body)?;
@@ -332,23 +337,25 @@ impl Store {
             }
             let mut call = create(c, owner, kind, &cid, Some(rid), body)?;
             remember(c, owner, &op, key.as_deref(), &request, &cid)?;
-            emit(
-                c,
-                owner,
-                if kind == "tool_call" {
-                    "tool.call_requested"
-                } else {
-                    "model.inference_requested"
-                },
-                requested,
-            )?;
+            if kind != "compaction_call" {
+                emit(
+                    c,
+                    owner,
+                    if kind == "tool_call" {
+                        "tool.call_requested"
+                    } else {
+                        "model.inference_requested"
+                    },
+                    requested,
+                )?;
+            }
             call["_created"] = json!(true);
             Ok(call)
         })
     }
     pub fn update_call(&self, work: &Work, kind: &str, cid: &str, patch: Value) -> Result<Value> {
         let kind = kind_name(kind)?;
-        if !matches!(kind, "tool_call" | "model_call") {
+        if !matches!(kind, "tool_call" | "model_call" | "compaction_call") {
             return Err(StoreError::Invalid("expected call kind".into()));
         }
         self.tx(|c| {
@@ -387,7 +394,7 @@ impl Store {
                         .or(call.get("error"))
                         .unwrap_or(&Value::Null),
                 )?;
-            } else if terminal(&call["status"]) {
+            } else if terminal(&call["status"]) && kind == "model_call" {
                 emit(
                     c,
                     owner,

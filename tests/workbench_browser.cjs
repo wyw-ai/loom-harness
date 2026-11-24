@@ -19,8 +19,8 @@ async function read(path, token = 'admin-token') {
   return res.json();
 }
 
-async function login(p, token) {
-  await p.goto(base + '/webui/');
+async function login(p, token, location = '') {
+  await p.goto(base + '/webui/' + location);
   await p.locator('#connection-button').click();
   await p.locator('#token-input').fill(token);
   await p.locator('#credential-save').click();
@@ -53,6 +53,57 @@ async function waitRun(id, status) {
     await new Promise((resolve) => setTimeout(resolve, 120));
   }
   assert.fail('Run ' + id + ' did not reach ' + status);
+}
+
+async function usageFigures(page) {
+  const created = await page.request.post(base + '/api/sessions', {
+    headers: {Authorization:'Bearer admin-token'}, data:{agent_id:'desktop'},
+  });
+  assert.ok(created.ok());
+  const session = await created.json();
+  const link = '#agent=desktop&session=' + session.id;
+  await login(page, 'admin-token', link);
+  const meter = page.locator('#session-usage');
+  const metric = name => meter.locator('[data-metric="' + name + '"]');
+  for (const [prompt, runTokens, sessionTokens] of [['统计第一轮',100,100], ['统计第二轮',150,250]]) {
+    const job = await send(page,prompt);
+    await waitRun(job.run_id,'completed');
+    const receipt = page.locator('#messages .run-usage[data-run-id="' + job.run_id + '"]');
+    await receipt.filter({hasText:runTokens + ' token'}).first().waitFor();
+    await metric('tokens').filter({hasText:new RegExp('^'+sessionTokens+'$')}).waitFor();
+    assert.match(await receipt.first().textContent(), /秒/);
+  }
+  await meter.locator('summary').click();
+  assert.match(await meter.innerText(), /50%/);
+  assert.match(await metric('speed').textContent(), /tok\/s/);
+  const snapshot = await read('sessions/' + session.id + '/usage');
+  assert.equal(snapshot.runs.length,2);
+  assert.deepEqual([snapshot.tokens.input,snapshot.tokens.output,snapshot.tokens.total],[200,50,250]);
+  assert.equal(snapshot.cache.hit_rate,0.5);
+  assert.ok(snapshot.speed.output_tokens_per_second > 0);
+  const last = snapshot.runs.find(run => run.tokens.total===150);
+  assert.ok(last.elapsed_ms > 0);
+  await page.keyboard.press('Escape');
+  await button(page.locator('.message-assistant').last(),'查看本轮').click();
+  const detail = page.locator('#desk-content [data-run-id="' + last.run_id + '"]');
+  await detail.waitFor();
+  assert.match(await detail.innerText(), /150 token/);
+  assert.match(await detail.innerText(), /总耗时/);
+  const forbidden = await page.request.get(base + '/api/sessions/' + session.id + '/usage',{
+    headers:{Authorization:'Bearer other-token'},
+  });
+  assert.equal(forbidden.status(),404);
+  await login(page,'admin-token',link);
+  await metric('tokens').filter({hasText:/^250$/}).waitFor();
+  await page.locator('#suggest-next').click();
+  await metric('tokens').filter({hasText:/^280$/}).waitFor();
+  const afterSuggestion = await read('sessions/' + session.id + '/usage');
+  assert.deepEqual(afterSuggestion.runs.map(r=>r.tokens.total).sort((a,b)=>a-b), [100,150]);
+  await page.setViewportSize({width:390,height:844});
+  await meter.locator('summary').click();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({width:1280,height:840});
 }
 
 async function pluginSuggestion(p) {
@@ -114,7 +165,7 @@ async function keyboardAndRendering(p) {
   const inspected = p.waitForResponse(r => r.url().endsWith('/api/runs/' + job.run_id));
   await button(answer, '查看本轮').click();
   assert.equal((await (await inspected).json()).id, job.run_id);
-  await p.locator('#desk-content .desk-facts').waitFor();
+  await p.locator('#desk-content .run-usage-details').waitFor();
   await p.locator('#desk-chat').click();
   const created = p.waitForResponse(r => r.request().method()==='POST' && r.url().endsWith('/branches'));
   await button(answer,'从此处分支').click();
@@ -305,6 +356,8 @@ async function approvalAndGoal(p) {
     await login(p, 'admin-token');
     await keyboardAndRendering(p);
     console.log('PASS keyboard navigation, scoped tools, slash actions and Markdown');
+    await usageFigures(p);
+    console.log('PASS two-run session usage, speed, cache, mobile and reload');
     await catalog(p);
     console.log('PASS catalog, installed packages, scheduling, HOME');
     await creator(p);

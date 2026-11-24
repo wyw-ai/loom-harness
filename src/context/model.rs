@@ -37,6 +37,10 @@ pub struct ModelTiming {
     pub request_started_us: i64,
     pub first_content_us: Option<i64>,
     pub first_reasoning_us: Option<i64>,
+    pub response_completed_us: Option<i64>,
+    /// Stream-only generation bounds. Buffered responses cannot measure decoding speed.
+    pub first_output_us: Option<i64>,
+    pub generation_ended_us: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -172,6 +176,9 @@ pub async fn complete_streaming(
         request_started_us: chrono::Utc::now().timestamp_micros(),
         first_content_us: None,
         first_reasoning_us: None,
+        response_completed_us: None,
+        first_output_us: None,
+        generation_ended_us: None,
     };
     let response = request.send().await.map_err(|e| ModelError {
         message: if e.is_timeout() {
@@ -227,7 +234,10 @@ fn required_text<'a>(v: &'a Value, key: &str) -> Result<&'a str, ModelError> {
         .ok_or_else(|| ModelError::invalid(format!("model response is missing {key}")))
 }
 
-fn parse_reply(body: &Value, timing: ModelTiming) -> Result<ModelReply, ModelError> {
+fn parse_reply(body: &Value, mut timing: ModelTiming) -> Result<ModelReply, ModelError> {
+    timing
+        .response_completed_us
+        .get_or_insert_with(|| chrono::Utc::now().timestamp_micros());
     let choice = body
         .pointer("/choices/0")
         .ok_or_else(|| ModelError::invalid("model returned no choice"))?;
@@ -283,6 +293,12 @@ fn parse_reply(body: &Value, timing: ModelTiming) -> Result<ModelReply, ModelErr
     })
 }
 
+pub struct SuggestionSample {
+    pub text: Option<String>,
+    pub usage: Value,
+    pub timing: ModelTiming,
+}
+
 /// Caller supplies only the history visible to the requesting user and
 /// rechecks the Session version, reply, permission and plugin before delivery.
 pub async fn suggest(
@@ -290,7 +306,7 @@ pub async fn suggest(
     route: &ModelRoute,
     visible_history: &[Value],
     prompt: &str,
-) -> Result<Option<String>, ModelError> {
+) -> Result<Option<SuggestionSample>, ModelError> {
     if prompt.trim().is_empty() {
         return Ok(None);
     }
@@ -303,13 +319,16 @@ pub async fn suggest(
         json!({"role":"user","content":serde_json::to_string(&visible).unwrap()}),
     ];
     let reply = complete(http, route, &request, &[], None).await?;
-    if reply.finish_reason != "stop" || !reply.tool_calls.is_empty() {
-        return Ok(None);
-    }
-    Ok(reply
+    let text = reply
         .content
+        .filter(|_| reply.finish_reason == "stop" && reply.tool_calls.is_empty())
         .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty() && s != "NONE" && !s.contains('\n') && s.chars().count() <= 400))
+        .filter(|s| !s.is_empty() && s != "NONE" && !s.contains('\n') && s.chars().count() <= 400);
+    Ok(Some(SuggestionSample {
+        text,
+        usage: reply.usage,
+        timing: reply.timing,
+    }))
 }
 
 #[cfg(test)]
@@ -323,6 +342,9 @@ mod tests {
             request_started_us: 1,
             first_content_us: None,
             first_reasoning_us: None,
+            response_completed_us: None,
+            first_output_us: None,
+            generation_ended_us: None,
         };
         let r = parse_reply(&payload, timing).unwrap();
         assert_eq!(r.tool_calls[0].arguments["x"], 2);
@@ -398,6 +420,7 @@ mod tests {
             )
             .await
             .unwrap()
+            .and_then(|sample| sample.text)
             .is_none()
         );
         let calls = log.lock().unwrap();

@@ -17,10 +17,24 @@ from harness import Instance
 def model(payload):
     messages = payload["messages"]
     text = json.dumps(messages, ensure_ascii=False)
+    last_user = next((m.get("content") for m in reversed(messages) if m["role"] == "user"), None)
+    if last_user in ("统计第一轮", "统计第二轮"):
+        first = last_user == "统计第一轮"
+        result = answer("第一轮已完成" if first else "第二轮已完成")
+        result["usage"] = {
+            "prompt_tokens": 80 if first else 120,
+            "completion_tokens": 20 if first else 30,
+            "total_tokens": 100 if first else 150,
+            "prompt_cache_hit_tokens": 40 if first else 60,
+            "prompt_cache_miss_tokens": 40 if first else 60,
+        }
+        return result
     if any(m["role"] == "user" and m.get("content") == "测试表格渲染" for m in messages):
         return answer("| 步骤 | 产物 |\n| --- | --- |\n| 复核 | **记录** |\n\n```txt\n<b>原文</b>\n```")
     if "Suggest one short next message" in text:
-        return answer("再检查一次记录")
+        result = answer("再检查一次记录")
+        result["usage"] = {"prompt_tokens":24, "completion_tokens":6, "total_tokens":30}
+        return result
     if not any(m["role"] == "tool" for m in messages):
         if "审批笔记测试" in text:
             name = next(

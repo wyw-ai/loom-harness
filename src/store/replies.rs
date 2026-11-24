@@ -101,6 +101,9 @@ impl Store {
                     }
                     _=>{}
                 }
+                if terminal(&run["status"]) {
+                    run["finished_us"]=json!(chrono::Utc::now().timestamp_micros());
+                }
             }
             save(c,"run",&run)?;
             Ok(reply)

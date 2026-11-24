@@ -1,5 +1,4 @@
-use super::model::{ModelError, ModelRoute, complete};
-use reqwest::Client;
+use super::model::ModelError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -66,10 +65,9 @@ pub fn build_messages_with_goal_prompt(
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct Compacted {
-    pub messages: Vec<Value>,
-    /// Material ranges are half-open offsets in the input to this build.
-    pub covered: Vec<(usize, usize)>,
+pub struct CompactionPlan {
+    pub input: [Value; 2],
+    pub range: (usize, usize),
 }
 
 fn text_view(message: &Value) -> std::borrow::Cow<'_, Value> {
@@ -163,19 +161,7 @@ fn compressible_range(messages: &[Value]) -> Option<(usize, usize)> {
 /// The limit is the input-message byte allowance after the caller reserves
 /// space for tools and output. Mark unsatisfied waits and required evidence
 /// with context_protected before calling. This never invokes a business tool.
-pub async fn compact(
-    http: &Client,
-    route: &ModelRoute,
-    messages: &[Value],
-    max_input_bytes: usize,
-    prompt: &str,
-) -> Result<Compacted, ModelError> {
-    if input_bytes(messages) <= max_input_bytes {
-        return Ok(Compacted {
-            messages: messages.to_vec(),
-            covered: vec![],
-        });
-    }
+pub fn plan_compaction(messages: &[Value], prompt: &str) -> Result<CompactionPlan, ModelError> {
     if prompt.trim().is_empty() {
         return Err(ModelError::invalid(
             "compaction plugin supplied no summary instruction",
@@ -197,23 +183,26 @@ pub async fn compact(
         json!({"role":"system","content":prompt}),
         json!({"role":"user","content":serde_json::to_string(&material).unwrap()}),
     ];
-    let reply = complete(http, route, &input, &[], None).await?;
-    if reply.finish_reason != "stop" || !reply.tool_calls.is_empty() {
-        return Err(ModelError::invalid(
-            "compaction did not produce a complete summary",
-        ));
-    }
+    Ok(CompactionPlan {
+        input,
+        range: (start, end),
+    })
+}
+
+pub fn apply_compaction(
+    messages: &[Value],
+    (start, end): (usize, usize),
+    summary: &str,
+    max_input_bytes: usize,
+) -> Result<Vec<Value>, ModelError> {
     let mut output = messages.to_vec();
-    output.splice(start..end,[json!({"role":"assistant","source":"compaction","content":format!("此前历史摘要：{}",reply.content.unwrap_or_default())})]);
+    output.splice(start..end,[json!({"role":"assistant","source":"compaction","content":format!("此前历史摘要：{summary}")})]);
     if input_bytes(&output) > max_input_bytes {
         return Err(ModelError::invalid(
             "compacted model input still exceeds its budget",
         ));
     }
-    Ok(Compacted {
-        messages: output,
-        covered: vec![(start, end)],
-    })
+    Ok(output)
 }
 
 #[cfg(test)]

@@ -18,6 +18,9 @@
   let account = null;
   let workspace = null;
   let thread = null;
+  const meter = window.LoomUsage.createSessionMeter(el('session-usage'), () => {
+    if (thread) refreshUsage(thread);
+  });
   let login = null;
   let disconnectedDrafts = null;
   const jump = element('button', 'chat-jump', '↓ 回到最新');
@@ -198,6 +201,7 @@
       cancelAnimationFrame(thread.paint);
     }
     thread = null;
+    meter.clear();
     prompt.value = '';
     messages.replaceChildren();
     el('empty-state').hidden = false;
@@ -485,8 +489,10 @@
     stopThread();
     const reading = account.reading.get(session.id);
     const t = {session, controller: new AbortController(), historyLength: 0, failures: 0, writes: 0,
+      runAnchors: new Map(), runBadges: new Map(),
       following: reading?.following ?? true, restoreTop: reading?.top, work: null};
     thread = t;
+    meter.start();
     account.lastSessions.set(workspace.agent.id,session.id);
     rememberChatLocation();
     el('thread-title').textContent = sessionTitle(session) || '新会话';
@@ -729,6 +735,7 @@
         const names = {user: '你', assistant: workspace.agent.name || workspace.agent.id, system: '系统'};
         if(Array.isArray(item.content) && item.content.some(p=>p.type==='attachment')){
           const row=message(role,names[role],item.content.filter(p=>p.type==='text').map(p=>p.text).join('\n'));
+          if (role==='user' && item.run_id) t.runAnchors.set(item.run_id,row);
           for(const part of item.content.filter(p=>p.type==='attachment')){
             const load=element('button','desk-button','查看图片'); load.type='button';
             load.addEventListener('click',async()=>{
@@ -746,6 +753,7 @@
           fragment.append(row);
         }else {
           const row=message(role,names[role],text);
+          if (item.run_id && (role==='user' || (role==='assistant' && item.status!=='progress'))) t.runAnchors.set(item.run_id,row);
           if (role==='assistant' && (!item.status || item.status==='completed')) {
             row.append(replyActions(t,item,text,index+1));
           }
@@ -892,6 +900,36 @@
     }
   }
 
+  function displayRunUsage(t, runs) {
+    for (const run of runs) {
+      const parent=t.active?.id===run.run_id && t.activity ? t.activity : t.runAnchors.get(run.run_id);
+      if (!parent) continue;
+      let badge=t.runBadges.get(run.run_id);
+      if(!badge){badge=document.createElement('span');t.runBadges.set(run.run_id,badge);}
+      window.LoomUsage.renderRunBadge(badge,run);
+      const bar=parent.querySelector('.reply-actions') || parent;
+      if (badge.parentNode!==bar) bar.append(badge);
+    }
+  }
+
+  async function refreshUsage(t) {
+    if(t!==thread) return;
+    if(t.usageLoading){t.usageAgain=true;return;}
+    t.usageLoading=true;
+    try {
+      const summary=await request(account,'sessions/'+pathId(t.session.id)+'/usage',{signal:t.controller.signal});
+      if(t!==thread || summary.session_id!==t.session.id)return;
+      meter.update(summary);
+      displayRunUsage(t,summary.runs);
+      settleViewport(t);
+    } catch {
+      if(t===thread) meter.failed();
+    } finally {
+      t.usageLoading=false;
+      if(t===thread && t.usageAgain){t.usageAgain=false;refreshUsage(t);}
+    }
+  }
+
   async function refresh(t) {
     if (t !== thread) return;
     if (t.refreshing) { t.again = true; return; }
@@ -914,6 +952,7 @@
       watchRun(t, active);
       updateActivity(t, calls);
       showHistory(t, items);
+      refreshUsage(t);
       const final = items.at(-1);
       const reply = final?.role==='assistant' ? final.run_id : null;
       if(reply!==t.reply){t.reply=reply;t.suggestion='';}
@@ -935,6 +974,7 @@
     } catch (e) {
       if (thread !== t) return;
       t.failures++;
+      meter.failed();
       setStatus(t.failures < 4 ? '读取会话失败，正在重试。' + e.message : '读取失败，请重新选择这个会话。' + e.message, 'error');
       if (t.failures < 4) t.timer = setTimeout(() => refresh(t), 1200 * t.failures);
     } finally {
@@ -1136,7 +1176,10 @@
       else setStatus('当前没有可用的推荐草稿。');
       updateControls();
     }catch(e){if(thread===t)setStatus(e.message,'error');}
-    finally{el('suggest-next').disabled=false;}
+    finally{
+      el('suggest-next').disabled=false;
+      if(thread===t) refreshUsage(t);
+    }
   });
   el('suggested-draft').addEventListener('click', async () => {
     const t = thread, suggestion = t?.suggestion, version = t?.historyLength;

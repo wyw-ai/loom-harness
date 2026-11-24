@@ -80,6 +80,7 @@ class WebUi(unittest.TestCase):
                 "/webui/app.js": "text/javascript",
                 "/webui/desk.js": "text/javascript",
                 "/webui/shell.js": "text/javascript",
+                "/webui/usage.js": "text/javascript",
                 "/webui/richtext.js": "text/javascript",
                 "/webui/chat-flow.css": "text/css",
                 "/webui/desk-workspace.css": "text/css",

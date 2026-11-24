@@ -94,6 +94,7 @@ impl Choice {
             ));
         }
         if data.trim() == "[DONE]" {
+            timing.response_completed_us = Some(now);
             return Ok(true);
         }
         let chunk: Value = serde_json::from_str(data)
@@ -131,6 +132,7 @@ impl Choice {
                     .push_str(reasoning);
                 if !reasoning.is_empty() {
                     timing.first_reasoning_us.get_or_insert(now);
+                    timing.first_output_us.get_or_insert(now);
                 }
             }
             if let Some(content) = fragment(delta, "content")? {
@@ -139,6 +141,7 @@ impl Choice {
                     .push_str(content);
                 if !content.is_empty() {
                     timing.first_content_us.get_or_insert(now);
+                    timing.first_output_us.get_or_insert(now);
                     on_text(content);
                 }
             }
@@ -163,10 +166,16 @@ impl Choice {
                     }
                     if let Some(arguments) = fragment(function, "arguments")? {
                         parts.arguments.push_str(arguments);
+                        if !arguments.is_empty() {
+                            timing.first_output_us.get_or_insert(now);
+                        }
                     }
                 }
             }
             self.finish = fragment(choice, "finish_reason")?.map(str::to_owned);
+            if self.finish.is_some() {
+                timing.generation_ended_us = Some(now);
+            }
         }
         Ok(false)
     }
@@ -226,6 +235,9 @@ mod tests {
             request_started_us: 5,
             first_content_us: None,
             first_reasoning_us: None,
+            response_completed_us: None,
+            first_output_us: None,
+            generation_ended_us: None,
         }
     }
 
@@ -282,6 +294,9 @@ mod tests {
         assert_eq!(reply.message["reasoning_content"], "thinking");
         assert_eq!(reply.timing.first_content_us, Some(18));
         assert_eq!(reply.timing.first_reasoning_us, Some(12));
+        assert_eq!(reply.timing.first_output_us, Some(12));
+        assert_eq!(reply.timing.response_completed_us, Some(60));
+        assert!(reply.timing.generation_ended_us.unwrap() < 60);
         assert_eq!(reply.usage["total_tokens"], 5);
     }
 
@@ -307,6 +322,8 @@ mod tests {
         c.ingest("", &frame, 11, &mut t, &mut |_| {}).unwrap();
         let reply = c.finish(t).unwrap();
         assert_eq!(reply.tool_calls.len(), 2);
+        assert_eq!(reply.timing.first_output_us, Some(10));
+        assert_eq!(reply.timing.generation_ended_us, Some(11));
         assert_eq!(reply.tool_calls[0].name, "read");
         assert_eq!(reply.tool_calls[0].id, "id-a");
         assert_eq!(reply.tool_calls[1].arguments, json!({"v":2}));

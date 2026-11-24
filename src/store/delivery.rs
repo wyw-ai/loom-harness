@@ -170,6 +170,7 @@ pub(super) fn deliver_in(
                 if action == "request_cancel" {
                     super::work::clear_progress_request(&mut run);
                     run["status"] = json!("cancelled");
+                    run["finished_us"] = json!(chrono::Utc::now().timestamp_micros());
                     run["stop_reason"] = json!("cancelled by user");
                     clear_lease(c, rid, false)?;
                     if let Some(reply_id) = run["reply_id"].as_str() {

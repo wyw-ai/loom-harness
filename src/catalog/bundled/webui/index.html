@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="chat-flow.css">
   <link rel="stylesheet" href="desk-workspace.css">
   <script src="richtext.js" defer></script>
+  <script src="usage.js" defer></script>
   <script src="shell.js" defer></script>
   <script src="desk.js" defer></script>
   <script src="app.js" defer></script>
@@ -107,6 +108,21 @@
           </div>
         </form>
         <div id="capability-prompts" aria-label="对话建议" hidden></div>
+        <details id="session-usage" hidden>
+          <summary aria-label="会话用量与压缩详情">
+            <span class="usage-title">会话用量</span>
+            <span class="usage-item">Token <b data-metric="tokens">—</b></span>
+            <span class="usage-item"><span data-speed-label>生成速度</span> <b data-metric="speed">—</b></span>
+            <span class="usage-item" title="最近一次模型输入占自动压缩阈值的比例">上下文占用 <b data-metric="context">—</b></span>
+            <span class="usage-item" title="有缓存用量回执的输入 token 命中率">缓存 <b data-metric="cache">—</b></span>
+            <span class="usage-chevron" aria-hidden="true"></span>
+          </summary>
+          <section class="usage-popover" aria-label="会话用量明细">
+            <div class="usage-head"><h2>会话用量</h2><button type="button" id="usage-refresh">刷新</button></div>
+            <div class="usage-state" role="status"></div>
+            <div class="usage-body"></div>
+          </section>
+        </details>
       </div>
     </main>
   </div>

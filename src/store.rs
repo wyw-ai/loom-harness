@@ -15,6 +15,7 @@ mod replies;
 mod stream;
 #[cfg(test)]
 mod tests;
+mod usage;
 mod work;
 
 pub(crate) use prompt::{
@@ -87,6 +88,7 @@ fn kind_name(kind: &str) -> Result<&str> {
         "delivery" | "deliveries" | "event-deliveries" => Ok("delivery"),
         "run" | "runs" => Ok("run"),
         "model_call" | "model-calls" | "model_calls" => Ok("model_call"),
+        "compaction_call" => Ok("compaction_call"),
         "tool_call" | "tool-calls" | "tool_calls" => Ok("tool_call"),
         "dispatch" | "dispatches" => Ok("dispatch"),
         "evaluation" | "evaluations" => Ok("evaluation"),
@@ -260,6 +262,9 @@ impl Store {
               model_call_id TEXT NOT NULL,attempt_id TEXT NOT NULL,event TEXT NOT NULL,text TEXT);
             CREATE INDEX IF NOT EXISTS run_stream_cursor ON run_stream(run_id,seq);
             CREATE INDEX IF NOT EXISTS run_stream_call ON run_stream(model_call_id,seq);
+            CREATE INDEX IF NOT EXISTS run_attempt_count ON run_stream(model_call_id) WHERE event='attempt_started';
+            CREATE INDEX IF NOT EXISTS run_terminal_events ON objects(owner,json_extract(doc,'$.run_id'),json_extract(doc,'$.type'))
+              WHERE kind='event' AND json_extract(doc,'$.source')='loom' AND json_extract(doc,'$.type') IN ('run.completed','run.failed','run.cancelled');
             CREATE TABLE IF NOT EXISTS consumed(consumer TEXT NOT NULL,event_id TEXT NOT NULL,
               PRIMARY KEY(consumer,event_id));
             CREATE TABLE IF NOT EXISTS subscription_results(consumer TEXT NOT NULL,event_id TEXT NOT NULL,

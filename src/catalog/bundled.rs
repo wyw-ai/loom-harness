@@ -3,7 +3,17 @@ use rusqlite::TransactionBehavior;
 
 const WEBUI_MANIFEST: &str = include_str!("bundled/webui/plugin.yaml");
 const WEBUI_ENTRYPOINT: &str = include_str!("bundled/webui/plugin.lua");
-const WEBUI_VERSION: &str = "1.2.0";
+const WEBUI_VERSION: &str = "1.3.0";
+const WEBUI_1_2_ASSETS: &[&str] = &[
+    "index.html",
+    "app.css",
+    "app.js",
+    "desk.js",
+    "shell.js",
+    "richtext.js",
+    "chat-flow.css",
+    "desk-workspace.css",
+];
 const WEBUI_ASSETS: &[(&str, &str, &str)] = &[
     (
         "index.html",
@@ -34,6 +44,11 @@ const WEBUI_ASSETS: &[(&str, &str, &str)] = &[
         "richtext.js",
         "text/javascript; charset=utf-8",
         include_str!("bundled/webui/richtext.js"),
+    ),
+    (
+        "usage.js",
+        "text/javascript; charset=utf-8",
+        include_str!("bundled/webui/usage.js"),
     ),
     (
         "chat-flow.css",
@@ -153,6 +168,7 @@ impl Catalog {
                 "1.1.0",
                 json!(["index.html", "app.css", "app.js", "desk.js"]),
             ),
+            Some("1.2.0") => ("1.2.0", json!(WEBUI_1_2_ASSETS)),
             _ => return Ok(()),
         };
         let legacy = self.home.join("packages/webui").join(version);
@@ -324,6 +340,7 @@ mod tests {
     fn official_webui_upgrade_preserves_disabled_instances_and_owner_scope() {
         for (version, assets) in [
             ("1.0.0", json!(["index.html", "app.css", "app.js"])),
+            ("1.2.0", json!(WEBUI_1_2_ASSETS)),
             (
                 "1.1.0",
                 json!(["index.html", "app.css", "app.js", "desk.js"]),

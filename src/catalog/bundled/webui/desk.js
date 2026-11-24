@@ -1169,13 +1169,15 @@ window.createLoomDesk = function createLoomDesk(client) {
     ];
   }
 
-  const runRows = (rows) =>
-    list(rows.slice().reverse(), (r) => [
+  function runRows(rows, usage) {
+    const summaries=new Map(usage?.runs.map(r => [r.run_id,window.LoomUsage.runLabel(r)]));
+    return list(rows.slice().reverse(), (r) => [
       r.id,
-      [r.agent_id, time(r.created_at)].filter(Boolean).join(' · '),
+      [r.agent_id, time(r.created_at), summaries.get(r.id)].filter(Boolean).join(' · '),
       stateTitle(r.status),
       move('runs', r.id),
     ]);
+  }
   function supplement(r, cancel = false) {
     const op = client.uid();
     edit(
@@ -1205,14 +1207,16 @@ window.createLoomDesk = function createLoomDesk(client) {
   async function runsView(id) {
     if (!id) return [runRows(await activeRead('runs'))];
     const path = 'runs/' + eid(id);
-    const [r, calls, models, steps] = await Promise.all([
+    const [r, calls, models, steps, usage] = await Promise.all([
       activeRead(path),
       activeRead(path + '/tool-calls'),
       activeRead(path + '/model-calls'),
       activeRead(path + '/steps'),
+      activeRead(path + '/usage').catch(()=>null),
     ]);
     const finished = ['completed', 'cancelled', 'failed'].includes(r.status);
     return [
+      window.LoomUsage.runDetails(usage,id),
       facts([
         ['状态', stateTitle(r.status)],
         ['Agent', r.agent_id],
@@ -1485,10 +1489,11 @@ window.createLoomDesk = function createLoomDesk(client) {
   }
   async function sessionView(id) {
     const path = 'sessions/' + eid(id);
-    const [s, items, runs] = await Promise.all([
+    const [s, items, runs, usage] = await Promise.all([
       activeRead(path),
       activeRead(path + '/context/items'),
       activeRead(path + '/runs'),
+      activeRead(path + '/usage').catch(()=>null),
     ]);
     const search = node('form', 'desk-controls'),
       input = node('input', 'desk-search');
@@ -1549,7 +1554,8 @@ window.createLoomDesk = function createLoomDesk(client) {
         s.parent_session_id && link('父会话', 'session', s.parent_session_id),
       ),
       externalAction('预览模型上下文', () => call(path + '/context/previews', 'POST', {})),
-      group('运行', runRows(runs)),
+      group('会话用量', window.LoomUsage.sessionFacts(usage)),
+      group('运行', runRows(runs,usage)),
       group('会话笔记', search, results, readout),
       data('历史及事件引用', items),
     ];
