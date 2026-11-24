@@ -1,0 +1,325 @@
+{
+  "date": "2026-11-24",
+  "implementation_commit": "296bd543b56dc6d81d926b8c2874ceb99c2d0094",
+  "binary_sha256": "ede492fff2535204eedb10b7c2640f6baddb14d42220b23eec453ad737736bd7",
+  "spec_cases": {
+    "A": 7,
+    "C": 15,
+    "T": 12,
+    "R": 13
+  },
+  "api_tests_passed": 51,
+  "api_tests_skipped": 0,
+  "rust_tests_passed": 21,
+  "client_tests_passed": 2,
+  "http_records": 2409,
+  "http_ledger_sha256": "94ec25302c36d43fa1a7a9feaee1209dd57a3e90282438da3b73f02900fba9e5",
+  "tests": [
+    {
+      "test": "acceptance_bus.BusAcceptance.test_r05_named_receipt_source_is_bound_to_the_original_tool",
+      "seconds": 1.819,
+      "passed": true,
+      "logged_http_requests": 21
+    },
+    {
+      "test": "acceptance_bus.BusAcceptance.test_r06_stop_after_sqlite_commit_before_xadd",
+      "seconds": 2.304,
+      "passed": true,
+      "logged_http_requests": 22
+    },
+    {
+      "test": "acceptance_bus.BusAcceptance.test_r07_stop_after_consumer_commit_before_xack",
+      "seconds": 11.616,
+      "passed": true,
+      "logged_http_requests": 25
+    },
+    {
+      "test": "acceptance_bus.BusAcceptance.test_r12_plugin_scope_redelivery_and_disable",
+      "seconds": 2.362,
+      "passed": true,
+      "logged_http_requests": 16
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_01_home_templates_and_versions",
+      "seconds": 1.122,
+      "passed": true,
+      "logged_http_requests": 25
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_02_instance_scopes_and_extensions",
+      "seconds": 0.7,
+      "passed": true,
+      "logged_http_requests": 30
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_03_mixed_sources_discovery_and_stale_binding",
+      "seconds": 2.252,
+      "passed": true,
+      "logged_http_requests": 70
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_04_standard_session_inbox_and_revoked_authority",
+      "seconds": 0.924,
+      "passed": true,
+      "logged_http_requests": 33
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_05_creator_authors_and_uses_a_real_plugin",
+      "seconds": 1.919,
+      "passed": true,
+      "logged_http_requests": 46
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_06_t12_lost_first_receipt_after_worker_replacement",
+      "seconds": 48.015,
+      "passed": true,
+      "logged_http_requests": 517
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_07_new_connection_revision_beats_late_refresh",
+      "seconds": 1.574,
+      "passed": true,
+      "logged_http_requests": 33
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_07b_connections_keep_their_addresses_and_identity",
+      "seconds": 1.294,
+      "passed": true,
+      "logged_http_requests": 23
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_08_independent_trigger_context_and_prompt_section",
+      "seconds": 0.638,
+      "passed": true,
+      "logged_http_requests": 28
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_09_direct_member_has_one_entry_and_can_be_retained",
+      "seconds": 0.699,
+      "passed": true,
+      "logged_http_requests": 20
+    },
+    {
+      "test": "acceptance_catalog.CatalogAcceptance.test_10_bundled_policies_can_be_disabled",
+      "seconds": 1.294,
+      "passed": true,
+      "logged_http_requests": 22
+    },
+    {
+      "test": "acceptance_composer.ComposerAcceptance.test_c09_c10_real_send_after_edit_and_after_a_delayed_response",
+      "seconds": 1.725,
+      "passed": true,
+      "logged_http_requests": 25
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c01_one_event_two_deliveries",
+      "seconds": 1.151,
+      "passed": true,
+      "logged_http_requests": 10
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c02_context_hook_and_sections_refreshed_without_new_session",
+      "seconds": 1.898,
+      "passed": true,
+      "logged_http_requests": 34
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c03_c08_compress_evidence_and_fail_when_required_input_cannot_fit",
+      "seconds": 1.274,
+      "passed": true,
+      "logged_http_requests": 21
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c03_read_only_progress_with_an_outstanding_job",
+      "seconds": 1.712,
+      "passed": true,
+      "logged_http_requests": 32
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c04_branch_cut_and_late_report",
+      "seconds": 1.599,
+      "passed": true,
+      "logged_http_requests": 24
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c04_branch_inside_parent_summary_excludes_after_cut_facts",
+      "seconds": 1.57,
+      "passed": true,
+      "logged_http_requests": 24
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c05_c06_goal_continuation_budget_and_wait_cancel",
+      "seconds": 1.447,
+      "passed": true,
+      "logged_http_requests": 23
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c05_worker_crash_retries_same_compacted_continuation",
+      "seconds": 3.004,
+      "passed": true,
+      "logged_http_requests": 25
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c07_repeated_receipt_resumes_goal_once",
+      "seconds": 1.73,
+      "passed": true,
+      "logged_http_requests": 23
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c08_change_or_cancel_during_compaction",
+      "seconds": 1.775,
+      "passed": true,
+      "logged_http_requests": 46
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c09_c10_c11_suggestions_scope_stale_response_and_manual_send",
+      "seconds": 1.566,
+      "passed": true,
+      "logged_http_requests": 21
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c11_private_material_and_persisted_summary_are_excluded_from_sampling",
+      "seconds": 1.275,
+      "passed": true,
+      "logged_http_requests": 16
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c11_suggestion_permission_revocation_quota_timeout",
+      "seconds": 1.577,
+      "passed": true,
+      "logged_http_requests": 24
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c12_note_metadata_search_and_line_reads",
+      "seconds": 3.489,
+      "passed": true,
+      "logged_http_requests": 71
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c13_log_from_history_event_and_restarted_worker",
+      "seconds": 4.483,
+      "passed": true,
+      "logged_http_requests": 58
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c13_mixed_result_parts_keep_origin_type_order_and_bytes",
+      "seconds": 1.371,
+      "passed": true,
+      "logged_http_requests": 19
+    },
+    {
+      "test": "acceptance_context.ContextAcceptance.test_c14_c15_image_provider_fallback_schema_and_errors",
+      "seconds": 1.666,
+      "passed": true,
+      "logged_http_requests": 27
+    },
+    {
+      "test": "acceptance_conversation.ControlledConversation.test_a03_two_independent_runs_steer_and_cancel",
+      "seconds": 1.561,
+      "passed": true,
+      "logged_http_requests": 26
+    },
+    {
+      "test": "acceptance_conversation.ControlledConversation.test_a04_deployment_default_and_missing_model",
+      "seconds": 1.738,
+      "passed": true,
+      "logged_http_requests": 11
+    },
+    {
+      "test": "acceptance_conversation.ControlledConversation.test_a05_reply_recovers_only_the_selected_question",
+      "seconds": 3.278,
+      "passed": true,
+      "logged_http_requests": 24
+    },
+    {
+      "test": "acceptance_conversation.ControlledConversation.test_a06_repeated_read_only_call_hits_total_budget",
+      "seconds": 2.709,
+      "passed": true,
+      "logged_http_requests": 24
+    },
+    {
+      "test": "acceptance_conversation.ControlledConversation.test_a07_parallel_reports_success_and_partial_failure",
+      "seconds": 1.82,
+      "passed": true,
+      "logged_http_requests": 27
+    },
+    {
+      "test": "acceptance_conversation.Conversation.test_a01_live_model_and_reconnect",
+      "seconds": 2.561,
+      "passed": true,
+      "logged_http_requests": 29
+    },
+    {
+      "test": "acceptance_conversation.Conversation.test_a02_live_model_uses_mcp_and_recalls_original_note",
+      "seconds": 10.011,
+      "passed": true,
+      "logged_http_requests": 109
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r01_direct_idempotency_and_scope",
+      "seconds": 1.121,
+      "passed": true,
+      "logged_http_requests": 18
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r02_timed_occurrence_survives_restart",
+      "seconds": 2.104,
+      "passed": true,
+      "logged_http_requests": 25
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r03_scoped_lua_rule_and_preview",
+      "seconds": 1.241,
+      "passed": true,
+      "logged_http_requests": 22
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r05_report_precedes_wait_and_repeated_callback_after_restart",
+      "seconds": 3.806,
+      "passed": true,
+      "logged_http_requests": 37
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r08_measured_execution_pool",
+      "seconds": 9.264,
+      "passed": true,
+      "logged_http_requests": 350
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r08_waiting_run_releases_the_default_worker",
+      "seconds": 1.833,
+      "passed": true,
+      "logged_http_requests": 22
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r09_accepted_cancellation_fences_late_model_return",
+      "seconds": 1.073,
+      "passed": true,
+      "logged_http_requests": 10
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r09_cancel_ci_and_keep_its_late_result",
+      "seconds": 2.202,
+      "passed": true,
+      "logged_http_requests": 36
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r10_pending_approval_across_restart",
+      "seconds": 3.799,
+      "passed": true,
+      "logged_http_requests": 48
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r11_ack_loss_by_receiver_capability",
+      "seconds": 7.915,
+      "passed": true,
+      "logged_http_requests": 103
+    },
+    {
+      "test": "acceptance_recovery.DispatchAcceptance.test_r13_replace_builder_keep_provider_and_observer",
+      "seconds": 1.867,
+      "passed": true,
+      "logged_http_requests": 34
+    }
+  ]
+}

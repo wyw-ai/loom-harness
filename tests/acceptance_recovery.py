@@ -1082,7 +1082,12 @@ class DispatchAcceptance(unittest.TestCase):
                 self.assertEqual(app.wait(run)["status"], "completed")
                 calls = app.api("GET", f"runs/{run}/model-calls")
                 self.assertEqual(len(calls), 1)
-                self.assertEqual(calls[0]["messages"], peers.models[-1]["messages"])
+                audit_fields = {"source", "context_protected", "source_event_id"}
+                sent_messages = [
+                    {key: value for key, value in message.items() if key not in audit_fields}
+                    for message in calls[0]["messages"]
+                ]
+                self.assertEqual(sent_messages, peers.models[-1]["messages"])
                 self.assertIn("explain current CI", json.dumps(calls[0]["messages"]))
                 self.assertEqual(
                     "CI-CTX-42" in json.dumps(calls[0]["messages"]), bool(idx)
