@@ -116,6 +116,12 @@ pub(super) fn deliver_in(
                 .or(asked_agent)
                 .or(body["agent_snapshot"]["id"].as_str())
                 .ok_or_else(|| StoreError::Invalid("session has no assigned agent".into()))?;
+            let (snapshot, prompt_event) = super::prompt::agent_for_run(
+                c,
+                owner,
+                agent,
+                body["agent_snapshot"].get("_max_rounds"),
+            )?;
             let rid = id("run");
             let run = create(
                 c,
@@ -124,7 +130,8 @@ pub(super) fn deliver_in(
                 &rid,
                 Some(s),
                 json!({
-                    "session_id":s,"agent_id":agent,"agent_snapshot":body["agent_snapshot"],"agent_revision":body["agent_snapshot"]["revision"],
+                    "session_id":s,"agent_id":agent,"agent_snapshot":snapshot,"agent_revision":snapshot["revision"],
+                    "system_prompt_event_id":prompt_event,
                     "delivery_id":did,"status":"queued","version":1,"step":0,"input":event,"inputs":[event],
                     "admitted_us":chrono::Utc::now().timestamp_micros(),
                     "goal":body["goal"],"delivery_contract":body["delivery_contract"],"result_schema":body["result_schema"]
@@ -139,7 +146,7 @@ pub(super) fn deliver_in(
                 c,
                 owner,
                 "run.started",
-                json!({"run_id":rid,"session_id":s,"delivery_id":did}),
+                json!({"run_id":rid,"session_id":s,"delivery_id":did,"system_prompt_event_id":prompt_event}),
             )?;
             delivery["run_id"] = run["id"].clone();
         }

@@ -88,6 +88,26 @@ pub(super) fn document(mut paths: Value, who: &crate::config::Identity) -> Value
                 "200"
             };
             let mut op = json!({"responses":{status:{"description":"Success","content":{"application/json":{"schema":{}}}}}});
+            if method == "get" {
+                let filter = match path {
+                    "runs" => Some((
+                        "system_prompt_event_id",
+                        "Find Runs bound to this Agent prompt event or the Run that used this effective prompt event.",
+                    )),
+                    "runs/{id}/model-calls" => Some((
+                        "system_prompt_event_id",
+                        "Find calls whose effective system message came from this event.",
+                    )),
+                    "events" => Some((
+                        "agent_id",
+                        "Filter events by Agent ID. Combine with type=agent.system_prompt_updated for base prompt history.",
+                    )),
+                    _ => None,
+                };
+                if let Some((name, description)) = filter {
+                    op["parameters"] = json!([{"name":name,"in":"query","schema":{"type":"string"},"description":description}]);
+                }
+            }
             if path == "runs/{id}/stream" {
                 op = json!({
                     "summary":"Stream provisional assistant text for one Run",

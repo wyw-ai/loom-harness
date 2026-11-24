@@ -27,6 +27,7 @@ const RUN_FIXED: &[&str] = &[
     "agent_id",
     "agent_snapshot",
     "agent_revision",
+    "system_prompt_event_id",
     "input",
     "inputs",
     "step",
@@ -44,6 +45,8 @@ const CALL_FIXED: &[&str] = &[
     "session_id",
     "created_at",
     "call_key",
+    "system_prompt_event_id",
+    "base_system_prompt_event_id",
     "_created",
 ];
 
@@ -320,6 +323,13 @@ impl Store {
             if body["status"].is_null() {
                 body["status"] = json!("pending")
             }
+            let mut requested = json!({"call_id":cid,"run_id":rid,"session_id":run["session_id"]});
+            if kind == "model_call" {
+                super::prompt::bind_model_prompt(c, &run, &mut body)?;
+                if let Some(event) = body.get("system_prompt_event_id") {
+                    requested["system_prompt_event_id"] = event.clone();
+                }
+            }
             let mut call = create(c, owner, kind, &cid, Some(rid), body)?;
             remember(c, owner, &op, key.as_deref(), &request, &cid)?;
             emit(
@@ -330,7 +340,7 @@ impl Store {
                 } else {
                     "model.inference_requested"
                 },
-                json!({"call_id":cid,"run_id":rid,"session_id":run["session_id"]}),
+                requested,
             )?;
             call["_created"] = json!(true);
             Ok(call)

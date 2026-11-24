@@ -175,12 +175,13 @@ async fn route(
         }
         ("POST", ["events"]) => {
             if body.get("type").and_then(Value::as_str).is_some_and(|t| {
-                t.split('.').next().is_some_and(|s| {
-                    matches!(
-                        s,
-                        "run" | "tool" | "model" | "delivery" | "goal" | "approval"
-                    )
-                })
+                t == "agent.system_prompt_updated"
+                    || t.split('.').next().is_some_and(|s| {
+                        matches!(
+                            s,
+                            "run" | "tool" | "model" | "delivery" | "goal" | "approval"
+                        )
+                    })
             }) || body["source"] == "loom"
             {
                 return Err(bad("reserved internal event"));
@@ -236,13 +237,18 @@ async fn route(
             Ok(result)
         }
         ("GET", ["events"] | ["runs"] | ["sessions"]) => {
-            let mut v = db.list(o, p[0], None)?;
+            let mut v = match (p[0], q.get("system_prompt_event_id")) {
+                ("runs", Some(id)) => db.runs_for_prompt(o, id)?,
+                _ => db.list(o, p[0], None)?,
+            };
             if let Some(items) = v.as_array_mut() {
                 items.retain(|i| {
-                    ["type", "source", "run_id", "session_id"].iter().all(|k| {
-                        q.get(*k)
-                            .is_none_or(|expected| i[*k].as_str() == Some(expected.as_str()))
-                    })
+                    ["type", "source", "run_id", "session_id", "agent_id"]
+                        .iter()
+                        .all(|k| {
+                            q.get(*k)
+                                .is_none_or(|expected| i[*k].as_str() == Some(expected.as_str()))
+                        })
                 });
             }
             Ok(v)
@@ -288,7 +294,14 @@ async fn route(
         }
         ("GET", ["runs", r, kind @ ("model-calls" | "tool-calls")]) => {
             db.get(o, "run", r)?;
-            Ok(db.list(o, kind, Some(r))?)
+            let mut entries = db.list(o, kind, Some(r))?;
+            if *kind == "model-calls"
+                && let Some(id) = q.get("system_prompt_event_id")
+                && let Some(items) = entries.as_array_mut()
+            {
+                items.retain(|call| call["system_prompt_event_id"].as_str() == Some(id.as_str()));
+            }
+            Ok(entries)
         }
         ("GET", ["runs", r, "steps"]) => Ok(db.run_steps(o, r)?),
         ("GET", ["runs", r, "tools"]) => {

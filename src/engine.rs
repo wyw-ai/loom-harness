@@ -253,7 +253,7 @@ pub fn preview(app: &App, owner: &str, sid: &str, agent_id: &str) -> Result<Valu
     )?;
     let sections = sections_for(app, owner, agent_id, &directory)?;
     Ok(
-        json!({"messages":context::build_messages(agent["system_prompt"].as_str().unwrap_or("You are a helpful assistant."),&sections,&conversation,None,false),"tools":schemas(&directory,false)}),
+        json!({"messages":context::build_messages(agent["system_prompt"].as_str().unwrap_or(crate::store::DEFAULT_SYSTEM_PROMPT),&sections,&conversation,None,false),"tools":schemas(&directory,false)}),
     )
 }
 
@@ -386,9 +386,16 @@ async fn step(app: &App, w: &Work) -> Result<()> {
             conversation.push(json!({"role":"user","source":"tool_evidence","context_protected":true,"content":format!("Received tool result for {}: {}",receipt["tool_call_id"],receipt["content"])}));
         }
     }
-    let system = agent["system_prompt"]
-        .as_str()
-        .unwrap_or("You are a helpful assistant.");
+    let prompt_event;
+    let system = if let Some(id) = run["system_prompt_event_id"].as_str() {
+        prompt_event = app.db.get(owner, "event", id)?;
+        s(&prompt_event, "content")?
+    } else {
+        // Runs admitted before prompt events retain their original Agent snapshot.
+        agent["system_prompt"]
+            .as_str()
+            .unwrap_or(crate::store::DEFAULT_SYSTEM_PROMPT)
+    };
     let mut sections = sections_for(app, owner, agent_id, &directory)?;
     if progress {
         let mut current = Vec::new();

@@ -92,11 +92,15 @@ impl Catalog {
         Ok(db)
     }
     pub(super) fn initialize(&self) -> R<()> {
-        let db = self.db()?;
-        db.execute_batch("CREATE TABLE IF NOT EXISTS catalog_current(kind TEXT NOT NULL,id TEXT NOT NULL,rev TEXT NOT NULL,PRIMARY KEY(kind,id));
-        CREATE TABLE IF NOT EXISTS catalog_versions(kind TEXT NOT NULL,id TEXT NOT NULL,rev TEXT NOT NULL,document TEXT NOT NULL,PRIMARY KEY(kind,id,rev));
-        CREATE TABLE IF NOT EXISTS catalog_diagnostics(kind TEXT,id TEXT,details TEXT,PRIMARY KEY(kind,id));
-        CREATE TABLE IF NOT EXISTS catalog_refresh(id TEXT PRIMARY KEY,generation INTEGER NOT NULL);").map_err(err)
+        let mut db = self.db()?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(err)?;
+        crate::store::initialize_shared_schema(&tx).map_err(err)?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS catalog_diagnostics(kind TEXT,id TEXT,details TEXT,PRIMARY KEY(kind,id));
+        CREATE TABLE IF NOT EXISTS catalog_refresh(id TEXT PRIMARY KEY,generation INTEGER NOT NULL);").map_err(err)?;
+        crate::store::backfill_agent_prompts(&tx).map_err(err)?;
+        tx.commit().map_err(err)
     }
     pub(super) fn get(&self, kind: &str, key: &str) -> R<Value> {
         self.db()?.query_row("SELECT v.document FROM catalog_current c JOIN catalog_versions v USING(kind,id,rev) WHERE c.kind=?1 AND c.id=?2",params![kind,key],|r|r.get::<_,String>(0)).optional().map_err(err)?
@@ -129,14 +133,42 @@ impl Catalog {
         &self,
         kind: &str,
         key: &str,
-        mut value: Value,
+        value: Value,
         expect: Option<&str>,
         file: Option<&Path>,
+    ) -> R<Value> {
+        self.save_with(kind, key, expect, file, || Ok(value))
+    }
+
+    pub(super) fn reload_agent(&self, key: &str, file: &Path) -> R<Value> {
+        // Read the YAML under the same writer lock as API PATCH so a reload
+        // cannot reinstall a stale file observed before another worker's save.
+        self.save_with("agent", key, None, None, || {
+            let mut value: Value = serde_yaml::from_str(&self.file(file)?).map_err(err)?;
+            if value["id"] != key {
+                return Err("invalid: agent ID".into());
+            }
+            if value.get("owner").is_none() {
+                value["owner"] = json!("admin");
+            }
+            self.validate_agent(&value)?;
+            Ok(value)
+        })
+    }
+
+    fn save_with(
+        &self,
+        kind: &str,
+        key: &str,
+        expect: Option<&str>,
+        file: Option<&Path>,
+        document: impl FnOnce() -> R<Value>,
     ) -> R<Value> {
         let mut db = self.db()?;
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(err)?;
+        let mut value = document()?;
         if file.is_some() {
             let alias:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM catalog_current WHERE kind=?1 AND lower(id)=lower(?2) AND id<>?2)",params![kind,key],|r|r.get(0)).map_err(err)?;
             if alias {
@@ -163,20 +195,23 @@ impl Catalog {
         m.remove("expected_revision");
         let rev = sha(&value);
         value["revision"] = json!(rev);
-        if let Some(p) = file {
-            write(p, serde_yaml::to_string(&value).map_err(err)?.as_bytes())?
-        }
         tx.execute(
             "INSERT OR IGNORE INTO catalog_versions VALUES(?1,?2,?3,?4)",
             params![kind, key, rev, value.to_string()],
         )
         .map_err(err)?;
         tx.execute("INSERT INTO catalog_current VALUES(?1,?2,?3) ON CONFLICT(kind,id) DO UPDATE SET rev=excluded.rev",params![kind,key,rev]).map_err(err)?;
+        if kind == "agent" {
+            crate::store::record_agent_prompt(&tx, &value).map_err(err)?;
+        }
         tx.execute(
             "DELETE FROM catalog_diagnostics WHERE kind=?1 AND id=?2",
             params![kind, key],
         )
         .map_err(err)?;
+        if let Some(p) = file {
+            write(p, serde_yaml::to_string(&value).map_err(err)?.as_bytes())?;
+        }
         tx.commit().map_err(err)?;
         Ok(value)
     }

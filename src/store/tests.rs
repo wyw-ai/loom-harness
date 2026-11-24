@@ -1,6 +1,20 @@
 use super::*;
 
 fn setup(store: &Store) -> (String, String, Work) {
+    store
+        .tx(|c| {
+            let agent = json!({"id":"reader","owner":"u","revision":12});
+            c.execute(
+                "INSERT INTO catalog_versions VALUES('agent','reader','12',?)",
+                [agent.to_string()],
+            )?;
+            c.execute(
+                "INSERT INTO catalog_current VALUES('agent','reader','12')",
+                [],
+            )?;
+            record_agent_prompt(c, &agent)
+        })
+        .unwrap();
     let session = store
         .create_session("u", json!({"agent_id":"reader"}))
         .unwrap();

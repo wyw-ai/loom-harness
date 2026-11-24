@@ -10,11 +10,16 @@ use uuid::Uuid;
 mod delivery;
 mod dispatch;
 mod extensions;
+mod prompt;
 mod replies;
 mod stream;
 #[cfg(test)]
 mod tests;
 mod work;
+
+pub(crate) use prompt::{
+    DEFAULT_SYSTEM_PROMPT, backfill_agent_prompts, initialize_shared_schema, record_agent_prompt,
+};
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
@@ -221,12 +226,9 @@ impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let c = Connection::open(path)?;
         c.busy_timeout(Duration::from_secs(5))?;
+        c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        initialize_shared_schema(&c)?;
         c.execute_batch("
-            PRAGMA journal_mode=WAL;
-            PRAGMA foreign_keys=ON;
-            CREATE TABLE IF NOT EXISTS objects(seq INTEGER PRIMARY KEY,kind TEXT NOT NULL,id TEXT NOT NULL,
-              owner TEXT NOT NULL,parent TEXT,doc TEXT NOT NULL,UNIQUE(kind,id));
-            CREATE INDEX IF NOT EXISTS objects_scope ON objects(owner,kind,parent,seq);
             CREATE TABLE IF NOT EXISTS history(seq INTEGER PRIMARY KEY,owner TEXT NOT NULL,session TEXT NOT NULL,
               origin TEXT NOT NULL,doc TEXT NOT NULL,UNIQUE(owner,session,origin));
             CREATE TABLE IF NOT EXISTS workq(seq INTEGER PRIMARY KEY,run_id TEXT NOT NULL UNIQUE,owner TEXT NOT NULL,
@@ -236,8 +238,6 @@ impl Store {
               model_call_id TEXT NOT NULL,attempt_id TEXT NOT NULL,event TEXT NOT NULL,text TEXT);
             CREATE INDEX IF NOT EXISTS run_stream_cursor ON run_stream(run_id,seq);
             CREATE INDEX IF NOT EXISTS run_stream_call ON run_stream(model_call_id,seq);
-            CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY,event_id TEXT NOT NULL UNIQUE,
-              published INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS consumed(consumer TEXT NOT NULL,event_id TEXT NOT NULL,
               PRIMARY KEY(consumer,event_id));
             CREATE TABLE IF NOT EXISTS subscription_results(consumer TEXT NOT NULL,event_id TEXT NOT NULL,

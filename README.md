@@ -34,6 +34,21 @@ curl.exe -N -H "Authorization: Bearer $env:LOOM_TEST_TOKEN" "$api/runs/$($delive
 
 Run 会从受理推进到完成或失败，重复查询同一 ID 可取得最终状态。配置 `LOOM_MODEL_ROUTES` 可以使用其他与 Chat Completions 兼容的提供方。例如 `{"local":{"base_url":"http://127.0.0.1:9000","model":"test","images":true}}`。每条路由可用 `api_key_env` 指向该提供方的凭据环境变量，多个模型可用 `LOOM_DEFAULT_MODEL` 选定默认项。设置 `--home` 或 `LOOM_HOME` 选择持久目录，`--role api`、`--role worker` 可在同一主机、同一 HOME 中分别启动入口与执行进程。默认 `all` 同时启动二者。
 
+## 从 system prompt 追溯模型请求
+
+Agent 创建或基础 `system_prompt` 的生效文本变化时，Loom 写入一条 `agent.system_prompt_updated` Event，`content` 保存完整指令。API 修改、Agent 自修改和 HOME 应用走同一套规则。将 A 改为 B 再改回 A，会得到三条按生效顺序排列的 Event。
+
+Run 在受理事务中把同一 Agent 当前的基础事件固定为 `Run.system_prompt_event_id`。后续工具回执、Goal 续跑和 worker 重启都使用这个版本。该 Run 的 ModelCall 用 `base_system_prompt_event_id` 记录基础绑定，用 `system_prompt_event_id` 指向当轮完整指令。插件段落或 Goal 等运行时指令使完整文本发生变化时，Loom 写入当前 Run 的 `run.system_prompt_updated`。连续使用同一文本的调用复用同一事件。显式配置为空且没有附加指令时，事件正文为空，发给模型的消息列表省略 system 角色。
+
+| 想查什么 | GET 路径 |
+| --- | --- |
+| 某个 Agent 的基础指令历史 | `/api/events?type=agent.system_prompt_updated&source=loom&agent_id={agent_id}` |
+| 某版基础指令影响的 Run | `/api/runs?system_prompt_event_id={event_id}` |
+| 某轮的完整系统指令 | 从 `/api/model-calls/{call_id}` 取 `system_prompt_event_id`，再读 `/api/events/{event_id}` 的 `content` |
+| 同一 Run 使用某条完整指令的所有调用 | `/api/runs/{run_id}/model-calls?system_prompt_event_id={event_id}` |
+
+升级已有 HOME 时，Loom 按 Agent 当时生效的修订创建基线。升级前已受理的 Run 继续按原快照工作，已有 ModelCall 可从其 `messages` 回看原文。
+
 ## 工具回执和推荐权限
 
 单个 HTTP JSON 请求体上限为 12 MiB。文本工具结果默认超过 8 KiB 就写入 HOME 下的 Note，可用 `LOOM_NOTE_THRESHOLD` 调整。读 Note 的模型单次正文预算由 `LOOM_NOTE_READ_BUDGET` 设置，默认 64 KiB；超出时返回正文大小与行数，调用方可缩小行号范围。

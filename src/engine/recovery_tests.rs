@@ -75,7 +75,9 @@ async fn recover_initial_tool_registration(first_child_registered: bool) {
         let delivery=old.db.deliver("u",event["id"].as_str().unwrap(),json!({"action":"start_run","target":{"session_id":session["id"]},"agent_snapshot":agent}),None).unwrap();
         let job = old
             .db
-            .claim("worker-before-interruption", 1)
+            // Leases expire on a whole-second boundary. Leave time to persist the
+            // interrupted calls even when the fixture starts just before that boundary.
+            .claim("worker-before-interruption", 3)
             .unwrap()
             .unwrap();
         let directory = old.catalog.tools("u", false, "reader").unwrap();

@@ -134,7 +134,7 @@ impl Catalog {
     fn resource(&self, path: impl AsRef<Path>) -> R<PathBuf> {
         safe(&self.home, path.as_ref())
     }
-    fn file(&self, path: &Path) -> R<String> {
+    pub(super) fn file(&self, path: &Path) -> R<String> {
         let p = path.strip_prefix(self.home.as_path()).map_err(err)?;
         fs::read_to_string(self.resource(p)?).map_err(err)
     }
@@ -369,19 +369,7 @@ impl Catalog {
             }
             let key = leaf(&dir)?;
             let f = dir.join("agent.yaml");
-            let load = (|| -> R<()> {
-                let mut a: Value = serde_yaml::from_str(&self.file(&f)?).map_err(err)?;
-                if a["id"] != key {
-                    return Err("invalid: agent ID".into());
-                }
-                if a.get("owner").is_none() {
-                    a["owner"] = json!("admin")
-                }
-                self.validate_agent(&a)?;
-                self.save("agent", key, a, None, None)?;
-                Ok(())
-            })();
-            if let Err(e) = load {
+            if let Err(e) = self.reload_agent(key, &f) {
                 self.diagnose("agent", key, &e, &json!({"path":f}))?
             }
         }
