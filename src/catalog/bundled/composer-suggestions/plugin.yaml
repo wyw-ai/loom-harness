@@ -1,0 +1,22 @@
+apiVersion: loom/v1alpha1
+kind: PluginPackage
+id: composer-suggestions
+version: "1.0.0"
+entrypoint: plugin.lua
+description: Supply instructions for a read-only draft of the user's next message.
+settings_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    principals:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties:
+          type: object
+          additionalProperties: false
+          properties:
+            enabled: {type: boolean}
+            read_private: {type: boolean}
+            timeout_ms: {type: integer, minimum: 1}
+            max_samples_per_minute: {type: integer, minimum: 0}

@@ -1,0 +1,6 @@
+apiVersion: loom/v1alpha1
+kind: PluginPackage
+id: goal
+version: "1.0.0"
+entrypoint: plugin.lua
+description: Continue an explicitly opted-in Run until its goal is resolved.

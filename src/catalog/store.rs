@@ -9,7 +9,15 @@ use std::{
 };
 
 pub(super) fn id(s: &str) -> R<&str> {
+    let first = s.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let device = matches!(first.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|p| {
+            first
+                .strip_prefix(p)
+                .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
+        });
     if s.is_empty()
+        || device
         || s.len() > 128
         || s == "."
         || s == ".."
@@ -30,10 +38,10 @@ pub(super) fn safe(root: &Path, relative: &Path) -> R<PathBuf> {
             return Err("invalid: resource path".into());
         };
         p.push(n);
-        if let Ok(m) = fs::symlink_metadata(&p) {
-            if m.file_type().is_symlink() {
-                return Err("invalid: symlink in resource path".into());
-            }
+        if let Ok(m) = fs::symlink_metadata(&p)
+            && linked(&m)
+        {
+            return Err("invalid: symlink in resource path".into());
         }
     }
     if p.exists() && !p.canonicalize().map_err(err)?.starts_with(root) {
@@ -47,8 +55,15 @@ pub(super) fn err(e: impl std::fmt::Display) -> String {
 pub(super) fn sha(v: &Value) -> String {
     format!("{:x}", Sha256::digest(v.to_string().as_bytes()))
 }
-pub(super) fn yaml(p: &Path) -> R<Value> {
-    serde_yaml::from_str(&fs::read_to_string(p).map_err(err)?).map_err(err)
+fn linked(m: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if m.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    m.file_type().is_symlink()
 }
 pub(super) fn dirs(p: &Path) -> R<Vec<PathBuf>> {
     if !p.exists() {
@@ -57,7 +72,7 @@ pub(super) fn dirs(p: &Path) -> R<Vec<PathBuf>> {
     let mut out = vec![];
     for entry in fs::read_dir(p).map_err(err)? {
         let entry = entry.map_err(err)?;
-        if !entry.file_type().map_err(err)?.is_symlink() {
+        if !linked(&fs::symlink_metadata(entry.path()).map_err(err)?) {
             out.push(entry.path())
         }
     }
@@ -66,7 +81,7 @@ pub(super) fn dirs(p: &Path) -> R<Vec<PathBuf>> {
 }
 pub(super) fn write(p: &Path, data: &[u8]) -> R<()> {
     fs::create_dir_all(p.parent().ok_or("invalid path")?).map_err(err)?;
-    let temp = p.with_extension(format!("loom-tmp-{}", std::process::id()));
+    let temp = p.with_extension(format!("loom-tmp-{}", uuid::Uuid::new_v4().simple()));
     fs::write(&temp, data).map_err(err)?;
     fs::rename(&temp, p).map_err(err)
 }
@@ -86,6 +101,19 @@ impl Catalog {
     pub(super) fn get(&self, kind: &str, key: &str) -> R<Value> {
         self.db()?.query_row("SELECT v.document FROM catalog_current c JOIN catalog_versions v USING(kind,id,rev) WHERE c.kind=?1 AND c.id=?2",params![kind,key],|r|r.get::<_,String>(0)).optional().map_err(err)?
             .map(|s|serde_json::from_str(&s).map_err(err)).transpose()?.ok_or_else(||format!("not found: {kind} {key}"))
+    }
+    pub(super) fn version(&self, kind: &str, key: &str, revision: &str) -> R<Value> {
+        let s = self
+            .db()?
+            .query_row(
+                "SELECT document FROM catalog_versions WHERE kind=?1 AND id=?2 AND rev=?3",
+                params![kind, key, revision],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(err)?
+            .ok_or("not found: resource revision")?;
+        serde_json::from_str(&s).map_err(err)
     }
     pub(super) fn all(&self, kind: &str) -> R<Vec<Value>> {
         let db = self.db()?;
@@ -109,6 +137,12 @@ impl Catalog {
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(err)?;
+        if file.is_some() {
+            let alias:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM catalog_current WHERE kind=?1 AND lower(id)=lower(?2) AND id<>?2)",params![kind,key],|r|r.get(0)).map_err(err)?;
+            if alias {
+                return Err("conflict: resource identifier differs only in case".into());
+            }
+        }
         let old = tx
             .query_row(
                 "SELECT rev FROM catalog_current WHERE kind=?1 AND id=?2",
@@ -117,10 +151,10 @@ impl Catalog {
             )
             .optional()
             .map_err(err)?;
-        if let Some(e) = expect {
-            if old.as_deref().unwrap_or("") != e {
-                return Err("conflict: stale resource revision".into());
-            }
+        if let Some(e) = expect
+            && old.as_deref().unwrap_or("") != e
+        {
+            return Err("conflict: stale resource revision".into());
         }
         let m = value
             .as_object_mut()

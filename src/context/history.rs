@@ -21,6 +21,22 @@ pub fn build_messages(
     goal: Option<&GoalInput>,
     continuation: bool,
 ) -> Vec<Value> {
+    build_messages_with_goal_prompt(
+        system,
+        sections,
+        history,
+        goal,
+        continuation.then_some("继续当前目标。先核对已有进度、完成条件和证据，再执行剩余工作。"),
+    )
+}
+
+pub fn build_messages_with_goal_prompt(
+    system: &str,
+    sections: &[String],
+    history: &[Value],
+    goal: Option<&GoalInput>,
+    continuation_prompt: Option<&str>,
+) -> Vec<Value> {
     let mut instructions: Vec<_> = std::iter::once(system)
         .chain(sections.iter().map(String::as_str))
         .filter(|s| !s.is_empty())
@@ -43,8 +59,8 @@ pub fn build_messages(
         messages.push(json!({"role":"system","content":instructions.join("\n\n")}));
     }
     messages.extend(history.iter().filter(|m| m["source"] != "goal").cloned());
-    if continuation && goal.is_some() {
-        messages.push(json!({"role":"user","source":"goal","content":"继续当前目标。先核对已有进度、完成条件和证据，再执行剩余工作。"}));
+    if let Some(prompt) = continuation_prompt.filter(|s| goal.is_some() && !s.trim().is_empty()) {
+        messages.push(json!({"role":"user","source":"goal","content":prompt}));
     }
     messages
 }

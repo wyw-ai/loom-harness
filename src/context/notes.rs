@@ -131,6 +131,7 @@ impl NoteStore {
         Ok(dir)
     }
 
+    #[cfg(test)]
     pub fn write(&self, session: &str, description: &str, body: &str) -> io::Result<NoteMeta> {
         self.write_once(session, &Uuid::new_v4().to_string(), description, body)
     }

@@ -20,15 +20,88 @@ fn descriptor(mut t: Value, source: &str, name: &str) -> R<Value> {
     t["id"] = json!(name);
     t["source"] = json!(source);
     t["direct"] = json!(t["exposure"] == "direct");
+    t["requires_approval"] = json!(t["requires_approval"] == true || t["approval"] == "required");
     if t.get("input_schema").is_none() {
         t["input_schema"] = json!({"type":"object"})
     }
     if t.get("description").is_none() {
         t["description"] = json!(name)
     }
+    for k in ["input_schema", "output_schema"] {
+        if let Some(s) = t.get(k) {
+            jsonschema::validator_for(s).map_err(|e| format!("invalid {k}: {e}"))?;
+        }
+    }
     Ok(t)
 }
 impl Catalog {
+    pub fn plugin_routes(&self, owner: &str, admin: bool) -> R<Value> {
+        let mut paths = json!({});
+        for i in self.all("plugin")? {
+            if i["enabled"] != true || (!admin && !includes(&i["allowed_owners"], owner)) {
+                continue;
+            }
+            let instance = string(&i, "id")?;
+            let package = self.package_for(&i)?;
+            for r in array(&package["routes"]) {
+                let path = format!("/api/extensions/{instance}{}", string(r, "path")?);
+                let method = string(r, "method")?.to_ascii_lowercase();
+                paths[path][method] = json!({"x-loom-instance":instance,"x-loom-version":i["version"],"responses":{"200":{"description":"Plugin response"}}});
+            }
+        }
+        Ok(paths)
+    }
+    fn guide(reference: &str) -> R<Value> {
+        let (name, text) = match reference {
+            "agent-authoring" | "agent-authoring@1" => (
+                "agent-authoring",
+                include_str!("../../docs/spec/reference/home.md"),
+            ),
+            "tool-sources" | "tool-sources@1" => (
+                "tool-sources",
+                include_str!("../../docs/spec/reference/tool-sources.md"),
+            ),
+            "plugin-contracts" | "plugin-contracts@1" => (
+                "plugin-contracts",
+                include_str!("../../docs/spec/reference/contracts.md"),
+            ),
+            _ => return Err("not found: guide version".into()),
+        };
+        Ok(
+            json!({"id":name,"version":"1","doc_ref":format!("{name}@1"),"content":text,"revision":sha(&json!(text))}),
+        )
+    }
+    pub fn apply_hook(
+        &self,
+        owner: &str,
+        agent_id: &str,
+        kind: &str,
+        input: &Value,
+    ) -> R<Option<Value>> {
+        let slot = match kind {
+            "trigger" => "trigger_plugin",
+            "context" => "context_plugin",
+            _ => return Err("invalid: hook kind".into()),
+        };
+        let agent = self.get_agent(owner, false, agent_id)?;
+        let Some(instance) = agent[slot].as_str() else {
+            return Ok(None);
+        };
+        let plugin = self.get("plugin", id(instance)?)?;
+        if plugin["enabled"] != true
+            || !(includes(&agent["grants"]["plugins"], instance)
+                || includes(&plugin["allowed_agents"], agent_id))
+        {
+            return Err("forbidden: hook binding".into());
+        }
+        let package = self.package_for(&plugin)?;
+        let ctx = json!({"agent_id":agent_id,"agent_config":agent["extensions"][instance],"settings":self.get("settings",instance).unwrap_or(json!({}))});
+        let value = lua::call_hook(string(&package, "code")?, kind, &ctx, input)?;
+        if (kind == "trigger" && !value.is_boolean()) || (kind == "context" && !value.is_array()) {
+            return Err("invalid: hook result".into());
+        }
+        Ok(Some(value))
+    }
     pub fn sections(&self, owner: &str, admin: bool, agent: &str) -> R<Vec<Value>> {
         let a = self.get_agent(owner, admin, agent)?;
         let mut ss = vec![];
@@ -89,6 +162,36 @@ impl Catalog {
     ) -> R<Value> {
         let (tools, sets) = lua::declarations(&code)?;
         let (routes, sections) = lua::extensions(&code)?;
+        for t in &tools {
+            descriptor(t.clone(), "plugin", id(string(t, "id")?)?)?;
+        }
+        for t in &sets {
+            id(string(t, "id")?)?;
+        }
+        let mut seen = BTreeSet::new();
+        for t in &templates {
+            if !seen.insert(id(string(t, "id")?)?) || !t["spec"].is_object() {
+                return Err("invalid: duplicate or malformed Agent template".into());
+            }
+        }
+        let mut resources = BTreeSet::new();
+        for r in &routes {
+            let path = string(r, "path")?;
+            let method = string(r, "method")?;
+            if !path.starts_with('/')
+                || path.contains(['?', '#'])
+                || path.split('/').any(|x| x == ".." || x == ".")
+                || !matches!(method, "GET" | "POST" | "PATCH" | "DELETE" | "PUT")
+                || !resources.insert((method, path))
+            {
+                return Err("invalid: duplicate or malformed plugin route".into());
+            }
+        }
+        for key in ["settings_schema", "agent_config_schema"] {
+            if let Some(s) = manifest.get(key) {
+                jsonschema::validator_for(s).map_err(|e| format!("invalid {key}: {e}"))?;
+            }
+        }
         let k = format!("{key}/{ver}");
         let d = json!({"id":key,"version":ver,"manifest":manifest,"code":code,"templates":templates,"tools":tools,"toolsets":sets,"routes":routes,"sections":sections});
         if let Ok(old) = self.get("package", &k) {
@@ -133,6 +236,7 @@ impl Catalog {
             t["code"] = package["code"].clone();
             t["allowed_agents"] = inst["allowed_agents"].clone();
             t["settings"] = settings.clone();
+            t["settings_revision"] = settings["revision"].clone();
             self.save("tool", &k, t, None, None)?;
         }
         for local in array(&package["toolsets"]) {
@@ -157,10 +261,10 @@ impl Catalog {
             if inst["enabled"] != true {
                 return Ok(false);
             }
-            if let Some(v) = item.get("instance_revision") {
-                if inst["revision"] != *v {
-                    return Ok(false);
-                }
+            if let Some(v) = item.get("instance_revision")
+                && inst["revision"] != *v
+            {
+                return Ok(false);
             }
         }
         if item["source"] == "mcp" {
@@ -212,10 +316,16 @@ impl Catalog {
                 if val["id"] != key {
                     return Err("invalid: plugin ID".into());
                 }
-                self.package_for(&val)?;
+                let package = self.package_for(&val)?;
                 let settings = dir.join("settings.yaml");
                 if settings.exists() {
-                    let v = serde_yaml::from_str(&self.file(&settings)?).map_err(err)?;
+                    let mut v: Value = serde_yaml::from_str(&self.file(&settings)?).map_err(err)?;
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("revision");
+                    }
+                    if let Some(s) = package["manifest"].get("settings_schema") {
+                        schema(s, &v)?
+                    }
                     self.save("settings", key, v, None, None)?;
                 }
                 let inst = self.save("plugin", key, val, None, None)?;
@@ -368,12 +478,23 @@ impl Catalog {
         let plugin_ok = includes(&a["grants"]["plugins"], key);
         match name {
             "agents.get" => Ok(a.clone()),
-            "harness.inspect" => {
-                Ok(json!({"templates":self.templates_for(owner,false)?,"version":env!("CARGO_PKG_VERSION")}))
-            }
-            "harness.docs" => Ok(
-                json!({"version":env!("CARGO_PKG_VERSION"),"guide":include_str!("../../docs/spec/reference/home.md"),"authoring":"Return a Lua function taking loom, then call loom.register_tool({id,description,input_schema,handler=function(ctx,args) ... end}). A handler receives only its instance settings and agent_config. Install with id, version, manifest, code; enable an authorized instance and bind its qualified tool ID."}),
+            "harness.inspect" => Ok(
+                json!({"templates":self.templates_for(owner,false)?,"version":env!("CARGO_PKG_VERSION")}),
             ),
+            "harness.docs" => {
+                let document = args["id"].as_str().unwrap_or("agent-authoring");
+                let reference = args["version"]
+                    .as_str()
+                    .map(|v| format!("{document}@{v}"))
+                    .unwrap_or_else(|| document.to_string());
+                let mut guide = Self::guide(&reference)?;
+                if guide["id"] == "agent-authoring" {
+                    guide["authoring"] = json!(
+                        "Return a Lua function taking loom. Call loom.register_tool({id,description,input_schema,handler=function(ctx,args) ... end}). A handler sees only its instance settings and agent_config. If granted, ctx.read_note(args.note_ref) reads that Note. Install with id, version, manifest, code; enable an authorized instance and bind its qualified tool ID."
+                    );
+                }
+                Ok(guide)
+            }
             "plugins.get" if plugin_ok => {
                 if let Some(ver) = args["version"].as_str() {
                     self.get("package", &format!("{}/{}", id(key)?, id(ver)?))
@@ -385,7 +506,10 @@ impl Catalog {
             "plugins.set_enabled" if plugin_ok => {
                 let mut p = json!({"enabled":args["enabled"].as_bool().ok_or("invalid: enabled")?});
                 let create = self.get("plugin", key).is_err();
-                if create { p["owner"]=json!(owner);p["allowed_owners"]=json!([owner]); }
+                if create {
+                    p["owner"] = json!(owner);
+                    p["allowed_owners"] = json!([owner]);
+                }
                 let package = args["package"].as_str().unwrap_or(key);
                 if package != key && !includes(&a["grants"]["plugins"], package) {
                     return Err("forbidden: package".into());
@@ -418,8 +542,26 @@ impl Catalog {
     ) -> R<Value> {
         let p: Vec<_> = path.trim_matches('/').split('/').collect();
         let p = p.strip_prefix(&["api"]).unwrap_or(&p);
+        if method == "GET" {
+            match p {
+                ["docs"] => {
+                    return Ok(json!([
+                        "agent-authoring@1",
+                        "tool-sources@1",
+                        "plugin-contracts@1"
+                    ]));
+                }
+                ["docs", reference] => return Self::guide(reference),
+                ["openapi.json"] => {
+                    return Ok(
+                        json!({"openapi":"3.1.0","info":{"title":"Loom installed plugin routes","version":env!("CARGO_PKG_VERSION")},"paths":self.plugin_routes(owner,admin)?}),
+                    );
+                }
+                _ => {}
+            }
+        }
         if method == "GET" && p == ["agent-templates"] {
-            return self.templates_for(owner,admin);
+            return self.templates_for(owner, admin);
         }
         if let ["extensions", instance, tail @ ..] = p {
             let inst = self.get("plugin", id(instance)?)?;
@@ -458,6 +600,7 @@ impl Catalog {
             ("GET", ["settings", p, "schema"]) => Ok(self
                 .package_for(&self.get("plugin", id(p)?)?)?["manifest"]["settings_schema"]
                 .clone()),
+            ("GET", ["settings", p, "versions", r]) => self.version("settings", id(p)?, r),
             ("PATCH", ["settings", p]) => self.settings_write(p, &body),
             ("POST", ["catalog", "apply"]) => {
                 self.reload()?;
@@ -465,6 +608,9 @@ impl Catalog {
             }
             ("GET", ["catalog", "diagnostics"]) => self.diagnostics(),
             ("GET", ["catalog", "tools"]) => Ok(json!(self.all("tool")?)),
+            ("GET", ["catalog", "tools", tool, "versions", revision]) => {
+                self.version("tool", tool, revision)
+            }
             ("GET", ["mcp", "connections"]) => Ok(json!(self.all("connection")?)),
             ("POST", ["mcp", "connections"]) => self.connection_write(
                 string(&body, "instance")?,

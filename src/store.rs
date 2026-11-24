@@ -239,8 +239,14 @@ impl Store {
                result TEXT NOT NULL,PRIMARY KEY(consumer,event_id));
             CREATE TABLE IF NOT EXISTS replyq(seq INTEGER PRIMARY KEY,reply_id TEXT NOT NULL UNIQUE,
                owner TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 1,token TEXT,worker TEXT,expires INTEGER);
+            CREATE TABLE IF NOT EXISTS run_steps(run_id TEXT NOT NULL,step INTEGER NOT NULL,
+               ready_receipt_ms INTEGER,started_ms INTEGER,committed_ms INTEGER,worker TEXT,
+               PRIMARY KEY(run_id,step));
             CREATE TABLE IF NOT EXISTS requests(owner TEXT NOT NULL,op TEXT NOT NULL,key TEXT NOT NULL,
               request TEXT NOT NULL,resource TEXT NOT NULL,PRIMARY KEY(owner,op,key));
+            CREATE TABLE IF NOT EXISTS instance_settings(name TEXT PRIMARY KEY,value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS suggestion_usage(owner TEXT NOT NULL,subject TEXT NOT NULL,
+              minute INTEGER NOT NULL,samples INTEGER NOT NULL,PRIMARY KEY(owner,subject));
         ")?;
         Ok(Self {
             db: Arc::new(Mutex::new(c)),
@@ -252,6 +258,32 @@ impl Store {
             .lock()
             .map_err(|_| StoreError::Storage("database mutex poisoned".into()))?;
         f(&c)
+    }
+    pub fn instance_id(&self) -> Result<String> {
+        self.tx(|c| {
+            c.execute(
+                "INSERT OR IGNORE INTO instance_settings(name,value) VALUES('instance_id',?)",
+                [Uuid::new_v4().to_string()],
+            )?;
+            Ok(c.query_row(
+                "SELECT value FROM instance_settings WHERE name='instance_id'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+    }
+    pub fn reserve_suggestion(&self, owner: &str, subject: &str, limit: u64) -> Result<bool> {
+        if limit == 0 {
+            return Ok(false);
+        }
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.tx(|c|{
+            let written=c.execute("INSERT INTO suggestion_usage(owner,subject,minute,samples) VALUES(?,?,unixepoch()/60,1)
+                ON CONFLICT(owner,subject) DO UPDATE SET minute=excluded.minute,
+                samples=CASE WHEN minute=excluded.minute THEN samples+1 ELSE 1 END
+                WHERE minute<>excluded.minute OR samples<?",params![owner,subject,limit])?;
+            Ok(written==1)
+        })
     }
     fn tx<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         let mut c = self
@@ -339,9 +371,14 @@ impl Store {
         })
     }
     pub fn consume_event(&self, consumer: &str, event_id: &str) -> Result<bool> {
-        self.consume_event_result(consumer,event_id,&Value::Null)
+        self.consume_event_result(consumer, event_id, &Value::Null)
     }
-    pub fn consume_event_result(&self, consumer:&str,event_id:&str,result:&Value)->Result<bool>{
+    pub fn consume_event_result(
+        &self,
+        consumer: &str,
+        event_id: &str,
+        result: &Value,
+    ) -> Result<bool> {
         self.tx(|c| {
             if !c.query_row(
                 "SELECT EXISTS(SELECT 1 FROM outbox WHERE event_id=?)",
@@ -350,31 +387,34 @@ impl Store {
             )? {
                 return Err(StoreError::NotFound);
             }
-            let inserted=c.execute(
+            let inserted = c.execute(
                 "INSERT OR IGNORE INTO consumed(consumer,event_id) VALUES(?,?)",
                 params![consumer, event_id],
             )? == 1;
-            if inserted{
-                c.execute("INSERT INTO subscription_results(consumer,event_id,result) VALUES(?,?,?)",
-                   params![consumer,event_id,result.to_string()])?;
+            if inserted {
+                if consumer == "runtime" {
+                    work::apply_runtime_event(c, event_id)?;
+                }
+                c.execute(
+                    "INSERT INTO subscription_results(consumer,event_id,result) VALUES(?,?,?)",
+                    params![consumer, event_id, result.to_string()],
+                )?;
             }
             Ok(inserted)
         })
     }
-    pub fn subscription_result(&self,consumer:&str,event_id:&str)->Result<Option<Value>>{
-        self.read(|c|{
-            let result:Option<String>=c.query_row("SELECT result FROM subscription_results WHERE consumer=? AND event_id=?",
-                params![consumer,event_id],|r|r.get(0)).optional()?;
-            result.map(|raw|serde_json::from_str(&raw).map_err(StoreError::from)).transpose()
-        })
-    }
-    pub fn consumed(&self, consumer: &str, event_id: &str) -> Result<bool> {
+    pub fn subscription_result(&self, consumer: &str, event_id: &str) -> Result<Option<Value>> {
         self.read(|c| {
-            Ok(c.query_row(
-                "SELECT EXISTS(SELECT 1 FROM consumed WHERE consumer=? AND event_id=?)",
-                params![consumer, event_id],
-                |r| r.get(0),
-            )?)
+            let result: Option<String> = c
+                .query_row(
+                    "SELECT result FROM subscription_results WHERE consumer=? AND event_id=?",
+                    params![consumer, event_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            result
+                .map(|raw| serde_json::from_str(&raw).map_err(StoreError::from))
+                .transpose()
         })
     }
 }

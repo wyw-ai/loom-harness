@@ -20,13 +20,12 @@ impl Peer<'_> {
             .post(string(self.connection, "url")?)
             .header("Accept", "application/json, text/event-stream")
             .json(&body);
-        if method == "tools/call" {
-            if let Some(k) = body
+        if method == "tools/call"
+            && let Some(k) = body
                 .pointer("/params/_meta/loom.idempotency_key")
                 .and_then(Value::as_str)
-            {
-                post = post.header("Idempotency-Key", k)
-            }
+        {
+            post = post.header("Idempotency-Key", k)
         }
         if method != "initialize" {
             post = post.header("MCP-Protocol-Version", &self.version)
@@ -75,10 +74,8 @@ impl Peer<'_> {
                 return Err("MCP response too large".into());
             }
             bytes.extend_from_slice(&chunk);
-            if sse {
-                if let Some(msg) = sse_response(&bytes, &body["id"]) {
-                    return decode_reply(&body["id"], msg);
-                }
+            if sse && let Some(msg) = sse_response(&bytes, &body["id"]) {
+                return decode_reply(&body["id"], msg);
             }
         }
         let reply: Value = if sse {
@@ -96,10 +93,10 @@ fn sse_response(bytes: &[u8], id: &Value) -> Option<Value> {
             .lines()
             .filter_map(|l| l.strip_prefix("data:").map(str::trim_start))
             .collect();
-        if let Ok(v) = serde_json::from_str::<Value>(&payload.join("\n")) {
-            if v["id"] == *id {
-                return Some(v);
-            }
+        if let Ok(v) = serde_json::from_str::<Value>(&payload.join("\n"))
+            && v["id"] == *id
+        {
+            return Some(v);
         }
     }
     None
@@ -145,12 +142,14 @@ impl Catalog {
         tool: &Value,
         args: &Value,
         tracking: &Value,
+        authorize: impl FnOnce() -> R<()>,
     ) -> R<Value> {
         let c = self.get("connection", string(tool, "connection_key")?)?;
         if c["revision"] != tool["connection_revision"] {
             return Err("conflict: MCP connection changed".into());
         }
         let mut peer = self.peer(&c).await?;
+        authorize()?;
         if !self.source_enabled(tool)?
             || self.get("tool", string(tool, "id")?)?["revision"] != tool["revision"]
         {
@@ -160,7 +159,16 @@ impl Catalog {
         if tool["effectful"] == true {
             req["_meta"] = json!({"loom.tool_call_id":string(tracking,"tool_call_id")?,"loom.idempotency_key":string(tracking,"idempotency_key")?});
         }
-        let result = peer.message("tools/call", req, true).await?;
+        let result = peer.message("tools/call", req, true).await.map_err(|e| {
+            if e.starts_with("MCP transport:")
+                || e.starts_with("MCP response:")
+                || e.starts_with("MCP HTTP status 5")
+            {
+                format!("external outcome unknown: {e}")
+            } else {
+                e
+            }
+        })?;
         if !result["content"].is_array() {
             return Err("invalid: MCP content".into());
         }
@@ -171,16 +179,18 @@ impl Catalog {
     }
     pub async fn recover(
         &self,
-        owner: &str,
-        admin: bool,
-        agent: &str,
+        scope: ToolScope<'_>,
         name: &str,
         args: Value,
-        snapshot: &Value,
         tracking: &Value,
     ) -> R<Value> {
         let unknown = || json!({"status":"unknown"});
-        if self.authorize(owner, admin, agent, name, snapshot).is_err() {
+        let ToolScope {
+            owner,
+            agent,
+            directory: snapshot,
+        } = scope;
+        if self.authorize(owner, false, agent, name, snapshot).is_err() {
             return Ok(unknown());
         }
         let t = self.get("tool", name)?;
@@ -189,6 +199,9 @@ impl Catalog {
         }
         let rec = &t["recovery"];
         let key = string(tracking, "idempotency_key")?;
+        if tracking.get("arguments") != Some(&args) {
+            return Ok(unknown());
+        }
         let result = if let Some(lookup) = rec["lookup_tool"].as_str() {
             let arg = if let (Some(job), Some(field)) = (
                 tracking["job_id"].as_str(),
@@ -208,7 +221,7 @@ impl Catalog {
             let mut peer = self.peer(&c).await?;
             let mut input = json!({});
             input[field] = json!(value);
-            if self.authorize(owner, admin, agent, name, snapshot).is_err() {
+            if self.authorize(owner, false, agent, name, snapshot).is_err() {
                 return Ok(unknown());
             }
             peer.message("tools/call",json!({"name":lookup,"arguments":input,"_meta":{"loom.tool_call_id":tracking["tool_call_id"]}}),true).await?
@@ -222,7 +235,11 @@ impl Catalog {
             {
                 return Ok(unknown());
             }
-            self.remote_call(&t, &args, tracking).await?
+            self.remote_call(&t, &args, tracking, || {
+                self.authorize(owner, false, agent, name, snapshot)
+                    .map(|_| ())
+            })
+            .await?
         } else {
             return Ok(unknown());
         };
@@ -258,8 +275,18 @@ impl Catalog {
                     if c["imports"].is_array()&&import.is_none(){continue}
                     let direct=import.is_some_and(|v|v["exposure"]=="direct");let fq=format!("{key}.{}",n.replace('%',"%25").replace('.',"%2E"));
                     let mut d=json!({"id":fq,"description":t["description"].as_str().unwrap_or(n),"local_id":n,"direct":direct,"input_schema":t["inputSchema"],"source":"mcp","instance":inst,"instance_revision":i["revision"],"connection_key":key,"connection_revision":c["revision"],"allowed_agents":c["allowed_agents"]});
-                    if let Some(v)=import{if v.is_object(){d["effectful"]=json!(v["effectful"]==true);if let Some(r)=v.get("recovery"){d["recovery"]=r.clone()}}}
-                    if !d["input_schema"].is_object(){return Err("invalid: missing tool input schema".into())}if let Some(s)=t.get("outputSchema"){d["output_schema"]=s.clone()}defs.push(d);
+                    d["requires_approval"]=json!(false);
+                    if let Some(source)=import.and_then(|v|v["receipt_source"].as_str()).or(c["receipt_source"].as_str()){
+                        d["receipt_source"]=json!(id(source)?);
+                    }
+                    if let Some(v)=import&& v.is_object(){
+                        d["effectful"]=json!(v["effectful"]==true);
+                        d["requires_approval"]=json!(v["requires_approval"]==true || v["approval"]=="required");
+                        if let Some(r)=v.get("recovery"){d["recovery"]=r.clone()}
+                    }
+                    if !d["input_schema"].is_object(){return Err("invalid: missing tool input schema".into())}
+                    if let Some(s)=t.get("outputSchema"){d["output_schema"]=s.clone()}
+                    defs.push(d);
                 }
                 let Some(next)=page["nextCursor"].as_str()else{break};if !cursors.insert(next.to_owned())||pages>1024{return Err("invalid: MCP pagination".into())}cursor=Some(next.into());
             }Ok::<_,String>(defs)

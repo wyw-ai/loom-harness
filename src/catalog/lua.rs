@@ -68,7 +68,7 @@ fn invoke(lua: &Lua, f: Function, ctx: &Value, args: &Value) -> R<Value> {
     context.set("note", mlua::Value::Nil).map_err(err)?;
     if let Some(note) = ctx.get("note") {
         let r = note["note_ref"].as_str().unwrap_or("").to_owned();
-        let b = note["body"].as_str().unwrap_or("").to_owned();
+        let b = note["body"].as_str().map(str::to_owned);
         context
             .set(
                 "read_note",
@@ -76,7 +76,9 @@ fn invoke(lua: &Lua, f: Function, ctx: &Value, args: &Value) -> R<Value> {
                     if s != r {
                         return Err(mlua::Error::runtime("forbidden: note outside scope"));
                     }
-                    Ok(b.clone())
+                    b.clone().ok_or_else(|| {
+                        mlua::Error::runtime("note exceeds input budget; read a smaller line range")
+                    })
                 })
                 .map_err(err)?,
             )
@@ -94,6 +96,22 @@ pub(crate) fn package(code: &str) -> R<(Lua, Table, Table)> {
     let sets = lua.create_table().map_err(err)?;
     let api = lua.create_table().map_err(err)?;
     crate::bus::register_lua_subscription(&lua, &api).map_err(err)?;
+    for (name, registry) in [
+        ("register_context", "loom.context"),
+        ("register_trigger", "loom.trigger"),
+        ("register_goal_strategy", "loom.goal_strategy"),
+        ("register_suggestion_prompt", "loom.suggestion_prompt"),
+    ] {
+        let register = lua
+            .create_function(move |vm, f: Function| {
+                if !vm.named_registry_value::<mlua::Value>(registry)?.is_nil() {
+                    return Err(mlua::Error::runtime("duplicate hook"));
+                }
+                vm.set_named_registry_value(registry, f)
+            })
+            .map_err(err)?;
+        api.set(name, register).map_err(err)?;
+    }
     let routes = lua.create_table().map_err(err)?;
     let sections = lua.create_table().map_err(err)?;
     for (name, dst) in [
@@ -157,6 +175,13 @@ pub(super) fn extensions(code: &str) -> R<(Vec<Value>, Vec<Value>)> {
     }
     Ok((rr, ss))
 }
+pub(super) fn call_hook(code: &str, kind: &str, ctx: &Value, input: &Value) -> R<Value> {
+    let (lua, _, _) = package(code)?;
+    let hook: Function = lua
+        .named_registry_value(&format!("loom.{kind}"))
+        .map_err(err)?;
+    invoke(&lua, hook, ctx, input)
+}
 pub(super) fn run_route(
     code: &str,
     method: &str,
@@ -184,7 +209,13 @@ pub(super) fn declarations(code: &str) -> R<(Vec<Value>, Vec<Value>)> {
         let (id, t) = entry.map_err(err)?;
         let _: Function = t.get("handler").map_err(err)?;
         let mut d = json!({"id":id});
-        for key in ["description", "input_schema", "output_schema", "exposure"] {
+        for key in [
+            "description",
+            "input_schema",
+            "output_schema",
+            "exposure",
+            "requires_approval",
+        ] {
             let v: mlua::Value = t.get(key).map_err(err)?;
             if !v.is_nil() {
                 d[key] = lua.from_value(v).map_err(err)?
@@ -197,6 +228,8 @@ pub(super) fn declarations(code: &str) -> R<(Vec<Value>, Vec<Value>)> {
         let members: Vec<String> = t.get("members").map_err(err)?;
         sets_out.push(json!({"id":id,"members":members}));
     }
+    out.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    sets_out.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
     Ok((out, sets_out))
 }
 pub(super) fn run_package(code: &str, name: &str, ctx: &Value, args: &Value) -> R<Value> {

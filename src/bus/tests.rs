@@ -201,7 +201,14 @@ async fn installed_lua_subscription_persists_only_its_authorized_result() -> Res
     let read = |event: &Value| store.subscription_result(&group, event_key(event).unwrap());
     let result = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if transport.acknowledged.lock().unwrap().len() == 4 {
+            let acknowledged = transport
+                .acknowledged
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, _)| name == &group)
+                .count();
+            if acknowledged == 4 {
                 break;
             }
             sleep(Duration::from_millis(30)).await;
@@ -230,7 +237,8 @@ async fn installed_lua_subscription_persists_only_its_authorized_result() -> Res
         catalog
             .subscription_plugins()
             .map_err(anyhow::Error::msg)?
-            .is_empty()
+            .iter()
+            .all(|plugin| plugin["id"] != "audit-team")
     );
     Ok(())
 }

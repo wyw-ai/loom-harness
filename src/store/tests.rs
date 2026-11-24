@@ -96,6 +96,46 @@ fn recovery_reclaims_once_and_fences_old_worker() {
 }
 
 #[test]
+fn concurrent_workers_claim_one_ready_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("loom.db");
+    let store = Store::open(&path).unwrap();
+    let (_, _, old) = setup(&store);
+    store
+        .tx(|c| {
+            c.execute("UPDATE workq SET expires=unixepoch()-1", [])?;
+            Ok(())
+        })
+        .unwrap();
+
+    let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let workers: Vec<_> = ["one", "two"]
+        .into_iter()
+        .map(|name| {
+            let db = Store::open(&path).unwrap();
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                db.claim(name, 60).unwrap()
+            })
+        })
+        .collect();
+    let winners: Vec<_> = workers
+        .into_iter()
+        .filter_map(|w| w.join().unwrap())
+        .collect();
+    assert_eq!(winners.len(), 1);
+    assert_eq!(winners[0].run["step"], old.run["step"]);
+    assert!(matches!(
+        store.finish(&old, "completed", json!({})),
+        Err(StoreError::StaleLease)
+    ));
+    store
+        .finish(&winners[0], "completed", json!({"output":"one answer"}))
+        .unwrap();
+}
+
+#[test]
 fn early_and_late_receipts_awaken_only_when_all_children_terminate() {
     let s = Store::open(":memory:").unwrap();
     let (_, rid, w) = setup(&s);
@@ -126,6 +166,11 @@ fn early_and_late_receipts_awaken_only_when_all_children_terminate() {
     s.receive_tool_result("u", b, result.clone(), "r3").unwrap();
     s.receive_tool_result("u", b, result, "another-delivery")
         .unwrap();
+    assert!(s.claim("two", 120).unwrap().is_none());
+    for entry in s.pending_events(100).unwrap() {
+        s.consume_event("runtime", entry["id"].as_str().unwrap())
+            .unwrap();
+    }
     let next = s.claim("two", 120).unwrap().unwrap();
     assert_eq!(next.run["id"], rid);
     assert_eq!(next.run["wake_reason"], "tool_result");
@@ -169,4 +214,29 @@ fn cancellation_fences_worker_and_late_receipt_only_updates_call() {
     .unwrap();
     assert!(s.claim("two", 120).unwrap().is_none());
     assert_eq!(s.get("u", "run", &rid).unwrap()["status"], "cancelled");
+}
+
+#[test]
+fn approval_arriving_before_wait_is_not_lost() {
+    let store = Store::open(":memory:").unwrap();
+    let (_, _, work) = setup(&store);
+    let args = json!({"environment":"test"});
+    let call = store
+        .record_call(
+            &work,
+            "tool_call",
+            json!({"arguments":args,"status":"awaiting_approval"}),
+        )
+        .unwrap();
+    let cid = call["id"].as_str().unwrap();
+    store
+        .decide_approval("u", cid, "approver", true, &args, "once")
+        .unwrap();
+    let saved = store
+        .finish(&work, "waiting", json!({"waiting_for":[cid]}))
+        .unwrap();
+    assert_eq!(saved["status"], "queued");
+    let next = store.claim("other", 20).unwrap().unwrap();
+    assert_eq!(next.run["approved_tool_call_id"], cid);
+    assert_eq!(next.run["wake_reason"], "approval");
 }

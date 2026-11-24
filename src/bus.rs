@@ -133,10 +133,10 @@ pub async fn consume_batch(
     for entry in &batch.entries {
         // Only trust the stable reference from the bus. Re-read scope, type and payload.
         let result = (|| -> Result<()> {
-            if let Some(event) = store.event_by_id(&entry.event_id)? {
-                if subscription.matches(&event) {
-                    (subscription.commit)(store, subscription.group(), &event)?;
-                }
+            if let Some(event) = store.event_by_id(&entry.event_id)?
+                && subscription.matches(&event)
+            {
+                (subscription.commit)(store, subscription.group(), &event)?;
             }
             Ok(())
         })();

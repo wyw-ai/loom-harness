@@ -1,4 +1,5 @@
 //! Versioned HOME resources, agent templates and dispatch-time tool authorization.
+mod bundled;
 pub(crate) mod lua;
 mod mcp;
 mod resources;
@@ -12,6 +13,15 @@ use std::{
 };
 use store::{err, id, safe, sha};
 pub type R<T> = Result<T, String>;
+type ToolDefinitions = BTreeMap<String, Value>;
+type Toolsets = BTreeMap<String, Vec<String>>;
+
+#[derive(Clone, Copy)]
+pub struct ToolScope<'a> {
+    pub owner: &'a str,
+    pub agent: &'a str,
+    pub directory: &'a Value,
+}
 pub use lua::evaluate_dispatch_rule;
 #[derive(Clone)]
 pub struct Catalog {
@@ -46,6 +56,7 @@ const DAILY: &[&str] = &[
     "write_note",
     "search_notes",
     "read_note",
+    "ask_user",
 ];
 const AUTHOR: &[&str] = &[
     "harness.inspect",
@@ -61,6 +72,9 @@ const SELF: &[&str] = &[
     "context.preview",
 ];
 fn builtin(name: &str) -> Value {
+    if name == "ask_user" {
+        return json!({"id":name,"description":"Ask the current user for missing information and wait for their reply.","input_schema":{"type":"object","properties":{"question":{"type":"string","minLength":1}},"required":["question"],"additionalProperties":false},"direct":true,"source":"builtin","requires_approval":false,"revision":"1"});
+    }
     let keys: &[(&str, &str)] = match name {
         "write_note" => &[("description", "string"), ("body", "string")],
         "read_note" => &[
@@ -96,7 +110,7 @@ fn builtin(name: &str) -> Value {
         .iter()
         .map(|(k, t)| (k.to_string(), json!({"type":t})))
         .collect();
-    json!({"id":name,"description":name,"input_schema":{"type":"object","properties":props},"direct":false,"source":"builtin","revision":"1"})
+    json!({"id":name,"description":name,"input_schema":{"type":"object","properties":props},"direct":false,"source":"builtin","requires_approval":false,"revision":"1"})
 }
 impl Catalog {
     pub fn open(home: impl AsRef<Path>) -> R<Self> {
@@ -115,6 +129,7 @@ impl Catalog {
         }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .retry(reqwest::retry::never())
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(err)?;
@@ -123,11 +138,9 @@ impl Catalog {
             http,
         };
         catalog.initialize()?;
+        catalog.seed_official()?;
         catalog.reload()?;
         Ok(catalog)
-    }
-    pub fn templates(&self) -> R<Value> {
-        self.templates_for("", false)
     }
     pub fn templates_for(&self, owner: &str, admin: bool) -> R<Value> {
         let mut result = vec![];
@@ -144,7 +157,10 @@ impl Catalog {
             );
         }
         for inst in self.all("plugin")? {
-            let visible = admin || !inst["allowed_owners"].is_array() || includes(&inst["allowed_owners"], owner) || inst["owner"] == owner;
+            let visible = admin
+                || !inst["allowed_owners"].is_array()
+                || includes(&inst["allowed_owners"], owner)
+                || inst["owner"] == owner;
             if inst["enabled"] == true && visible {
                 let package = self.package_for(&inst)?;
                 for t in array(&package["templates"]) {
@@ -180,7 +196,7 @@ impl Catalog {
             .cloned()
             .unwrap_or(json!("standard"));
         let name = t.as_str().or(t["id"].as_str()).ok_or("invalid: template")?;
-        let options = self.templates_for(owner,admin)?;
+        let options = self.templates_for(owner, admin)?;
         let mut matching = array(&options).filter(|x| {
             x["id"] == name
                 && t.get("source").is_none_or(|s| x["source"] == *s)
@@ -270,7 +286,7 @@ impl Catalog {
             &format!("{}/{}", string(i, "package")?, string(i, "version")?),
         )
     }
-    fn available(&self, a: &Value) -> R<(BTreeMap<String, Value>, BTreeMap<String, Vec<String>>)> {
+    fn available(&self, a: &Value) -> R<(ToolDefinitions, Toolsets)> {
         let mut tools = BTreeMap::new();
         let mut sets = BTreeMap::new();
         let grants = &a["grants"];
@@ -307,6 +323,18 @@ impl Catalog {
                 continue;
             }
             let mut d = src.clone();
+            if let Some(instance) = src["instance"].as_str() {
+                d["agent_revision"] = a["revision"].clone();
+                d["agent_config_revision"] = json!(sha(&a["extensions"][instance]));
+                if src["source"] == "mcp" {
+                    d["version"] = self.get("plugin", instance)?["version"].clone();
+                    d["settings_revision"] = self
+                        .get("settings", instance)
+                        .ok()
+                        .map(|s| s["revision"].clone())
+                        .unwrap_or(Value::Null);
+                }
+            }
             if let Some(m) = d.as_object_mut() {
                 for k in [
                     "code",
@@ -341,10 +369,10 @@ impl Catalog {
             if let Some(t) = b["tool"].as_str().or(b.as_str()) {
                 chosen.insert(t.to_string());
             }
-            if let Some(s) = b["toolset"].as_str() {
-                if let Some(m) = sets.get(s) {
-                    chosen.extend(m.iter().cloned());
-                }
+            if let Some(s) = b["toolset"].as_str()
+                && let Some(m) = sets.get(s)
+            {
+                chosen.extend(m.iter().cloned());
             }
         }
         Ok(json!(
@@ -374,59 +402,30 @@ impl Catalog {
         let curr = array(&now)
             .find(|t| t["id"] == name)
             .ok_or("forbidden: tool binding revoked")?;
-        if curr["revision"] != old["revision"] {
+        if curr["revision"] != old["revision"]
+            || curr["settings_revision"] != old["settings_revision"]
+            || curr["agent_config_revision"] != old["agent_config_revision"]
+        {
             return Err("conflict: tool binding changed".into());
         }
         Ok(curr.clone())
     }
-    pub async fn execute(
-        &self,
-        owner: &str,
-        admin: bool,
-        agent_id: &str,
-        name: &str,
-        args: Value,
-        snapshot: &Value,
-    ) -> R<Value> {
-        self.execute_with_context(owner, admin, agent_id, name, args, snapshot, &Value::Null)
-            .await
-    }
-    pub async fn execute_with_context(
-        &self,
-        owner: &str,
-        admin: bool,
-        agent_id: &str,
-        name: &str,
-        args: Value,
-        snapshot: &Value,
-        context: &Value,
-    ) -> R<Value> {
-        self.execute_tracked(
-            owner,
-            admin,
-            agent_id,
-            name,
-            args,
-            snapshot,
-            context,
-            &Value::Null,
-        )
-        .await
-    }
     pub async fn execute_tracked(
         &self,
-        owner: &str,
-        admin: bool,
-        agent_id: &str,
+        scope: ToolScope<'_>,
         name: &str,
         args: Value,
-        snapshot: &Value,
         context: &Value,
         tracking: &Value,
     ) -> R<Value> {
-        let tool = self.authorize(owner, admin, agent_id, name, snapshot)?;
+        let ToolScope {
+            owner,
+            agent: agent_id,
+            directory: snapshot,
+        } = scope;
+        let tool = self.authorize(owner, false, agent_id, name, snapshot)?;
         schema(&tool["input_schema"], &args)?;
-        let a = self.get_agent(owner, admin, agent_id)?;
+        let a = self.get_agent(owner, false, agent_id)?;
         if tool["source"] == "builtin" {
             return self.builtin_call(owner, &a, name, args).await;
         }
@@ -435,11 +434,15 @@ impl Catalog {
             return Err("conflict: tool binding changed".into());
         }
         let inst = raw["instance"].as_str().unwrap_or("");
+        if !inst.is_empty() && tool["agent_config_revision"] != sha(&a["extensions"][inst]) {
+            return Err("conflict: Agent plugin configuration changed".into());
+        }
         let mut ctx = json!({"agent_id":agent_id,"agent_config":a["extensions"][inst],"settings":raw["settings"]});
-        if let Some(note) = context.get("note") {
-            if note["note_ref"].is_string() && note["note_ref"] == args["note_ref"] {
-                ctx["note"] = note.clone();
-            }
+        if let Some(note) = context.get("note")
+            && note["note_ref"].is_string()
+            && note["note_ref"] == args["note_ref"]
+        {
+            ctx["note"] = note.clone();
         }
         let result = match raw["source"].as_str() {
             Some("home") => lua::run(string(&raw, "code")?, &ctx, &args)?,
@@ -449,7 +452,13 @@ impl Catalog {
                 &ctx,
                 &args,
             )?,
-            Some("mcp") => self.remote_call(&raw, &args, tracking).await?,
+            Some("mcp") => {
+                self.remote_call(&raw, &args, tracking, || {
+                    self.authorize(owner, false, agent_id, name, snapshot)
+                        .map(|_| ())
+                })
+                .await?
+            }
             _ => return Err("invalid: tool source".into()),
         };
         if let Some(s) = raw.get("output_schema") {
