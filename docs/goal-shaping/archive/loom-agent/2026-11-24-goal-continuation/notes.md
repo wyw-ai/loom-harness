@@ -31,3 +31,7 @@ loom-harness 采纳的约定是每次为有效 Goal 构建主模型请求时都�
 ## CI 首个受理回执丢失
 
 这次反例把中断提前到 CI 已创建作业、worker 还没保存作业号的时候。核对的 Codex 远端命令路径在启动确认前断线会报告错误，并尝试按进程标识清理。loom-harness 的设计按各外部服务实际支持的查询和幂等能力核实原调用。已将四种恢复分支与迟到、重复回执的验收补入工具层归档，同时明确 Goal 不会因缺少受理回执而新建提交。[Codex 处理启动回包](https://github.com/openai/codex/blob/8b02797a2ea1feaca69242db7e13581553c0da70/codex-rs/exec-server/src/client.rs#L1230-L1261) · [loom-harness 的恢复分支](../2026-11-23-initial/tools.md#lost-acceptance-receipt)
+
+## 输入框推荐
+
+同一版 Codex 的测试覆盖了带输入框预测标记的一次采样，也覆盖了在临时分支上预测下一句话。loom-harness 采纳了由插件提供只读推荐的设计，客户端以答复与会话版本请求，用户发送后才投递。以用户中途补充“先别推”检验过期推荐的处理，接口命名留待评审。[Codex 采样测试](https://github.com/openai/codex/blob/8b02797a2ea1feaca69242db7e13581553c0da70/codex-rs/app-server/tests/suite/v2/thread_sample.rs#L396-L429) · [临时分支测试](https://github.com/openai/codex/blob/8b02797a2ea1feaca69242db7e13581553c0da70/codex-rs/app-server/tests/suite/v2/thread_fork.rs#L3126-L3167) · [插件设计归档](../2026-11-23-initial/design.md#composer-suggestions)

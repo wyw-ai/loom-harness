@@ -186,13 +186,13 @@ DeepSeek Harness 对照取自上游提交 `4b399c39a6d1479cd84ca591b4d7c88e24d38
 | 候选 | 可借鉴的行为 | loom-harness 里的职责 |
 | --- | --- | --- |
 | 跨 Session 记忆 | Managed Agents 在 Session 挂载记忆库，提示词只介绍库，具体内容由工具读取。Copilot 对仓库记忆保留代码依据，使用时结合当前分支判断。Grok Team Bot 区分成员个人知识和团队采纳的知识。[Managed Agents](https://platform.claude.com/docs/en/managed-agents/memory) · [Copilot Memory](https://docs.github.com/en/copilot/concepts/prompting-and-context/copilot-memory) · [Grok Team Bot](https://docs.x.ai/grok-bot/team-bots) | 建议作为官方可选插件。Agent 绑定可用记忆库，Session 按调用者取得可读写范围。section 提供库的用途，Tool 提供按需查读、更新和忘记。一次性交办留在 Run。 |
-| 大工具结果按需读取 | Claude Code 会将超限的成功且不含图片的 MCP 结果保存为文件，模型先得到路径。[Claude Code MCP](https://code.claude.com/docs/en/mcp#mcp-output-limits-and-warnings) | 在直接工具结果或 Code Mode 外层结果进入模型输入时提供短预览、调用状态和稳定引用。原文可定位、搜索或分段读取。优先复用工具方案已有的产物引用与读取权限。 |
+| 大工具结果按需读取 | Claude Code 会将超限的成功且不含图片的 MCP 结果保存为文件，模型先得到路径。[Claude Code MCP](https://code.claude.com/docs/en/mcp#mcp-output-limits-and-warnings) | 11 月 23 日建议在直接工具或 Code Mode 外层结果中提供短预览、状态和原文引用，并讨论过定位、搜索及分段读取。11 月 24 日确认的 Note 检索只匹配描述，读取语义见[补充记录](#note-decision)。 |
 | 工作区指令 | Codex 沿项目根到工作目录发现 AGENTS.md，Copilot 云端 Agent 支持仓库和路径规则，Claude Code 在访问匹配文件时加载相应规则。[Codex](https://developers.openai.com/codex/guides/agents-md/) · [Copilot](https://docs.github.com/en/copilot/reference/custom-instructions-support) · [Claude Code](https://code.claude.com/docs/en/memory) | 有工作区的 Agent 可启用。选择与本轮工作范围有关的规则，记下来源版本，通过上下文构建提供。普通仓库文件保留其来源和指令权限级别。 |
 | 验收反馈 | Managed Agents 的 Outcomes 在独立上下文中按标准检查产物，逐项反馈交回主 Agent。[Managed Agents Outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes) | 适合明确约定验收标准的交办。在准备对外交付之前检查候选产物，有缺项时把证据作为原 Run 的输入，沿正常触发策略决定是否再推理。按同一产物版本去重，并给返工设上限。 |
 
 显式点选文件、代码片段或既有记录可复用投递材料和 `context.build`。可与大工具结果共用受权限和版本约束的读取能力，保留不同的选入时机。基础工具发现已在 Code Mode 的 `catalog.search` 和 `catalog.describe` 中。[Codex IDE](https://developers.openai.com/codex/ide/features/) · [工具方案](tools.md)
 
-2026-11-23，用户进一步收敛上述四项。跨 Session 记忆暂缓。工作区规则发现属于外部应用，loom-harness 作为原子的上下文与 Agent 管理中心，只提供投递、选材、组装和 section 等可组合能力。独立 outcome 验收暂缓。轻量用例可把本次验收要求直接写入原交办 Event，由既有 Run 引用；已有检查工具的返回可作为完成依据。这个建议无须创建独立资源或评分流程。以上范围已同步当前共识，基线为 `a8112541b08c024dcd9a749ddc2a83373e550327651575d3a4320b24a9bd4bb5`。用户要求细化大工具结果如何存和看，[工具方案](tools.md#large-tool-results)现给出宿主持久存原文、模型有界预览、按引用读取和外部下载的候选设计，接口名与后端仍为建议。
+2026-11-23，用户进一步收敛上述四项。跨 Session 记忆暂缓。工作区规则发现属于外部应用，loom-harness 作为原子的上下文与 Agent 管理中心，只提供投递、选材、组装和 section 等可组合能力。独立 outcome 验收暂缓。轻量用例可把本次验收要求直接写入原交办 Event，由既有 Run 引用；已有检查工具的返回可作为完成依据。这个建议无须创建独立资源或评分流程。以上范围已同步当前共识，基线为 `a8112541b08c024dcd9a749ddc2a83373e550327651575d3a4320b24a9bd4bb5`。用户要求细化大工具结果如何存和看，当时提出宿主持久存原文、模型有界预览、按引用读取和外部下载。后来确认的模型工具及云端归属见[Note 设计](tools.md#large-tool-results)。
 
 <a id="always-on-agents"></a>
 
@@ -303,3 +303,39 @@ DeepSeek Harness 对照取自上游提交 `4b399c39a6d1479cd84ca591b4d7c88e24d38
 用户确认可以结束本轮目标讨论，要求保存全过程并生成首版 spec。主题沿用 `loom-agent` 标识，项目名为 loom-harness。已将当前共识、设计快照、八项总览、工具层草案、流程图与笔记关联到[规范入口](../../../../spec/README.md)。
 
 本轮部分采纳。云端 Agent 运行、Rust 与 Lua 插件、事件投递、上下文与工具边界、模型选择与故障切换、用户图片输入和结构化结果交付进入设计基线。32 个事件的名称、具体 REST 与工具名、Run 临时开启、动态安装、文档注册格式和插件分包等保留为设计候选。子 Agent、跨会话记忆、工作环境恢复、通用官方 `read_skill` 与独立 outcome 验收暂缓。归档时仓库只有文档，运行验收仍待实现后执行。
+
+## 2026-11-24 · 补充实例 HOME 与配置生效约定
+
+用户要求将 HOME 和逐插件配置补入既有归档及现行规范。讨论以“同一个 MCP 插件接两台服务器”和“改发布标签工具后，在途调用如何恢复”区分了包版本、插件实例、具名资源与调用修订。已将文件和 REST 共用定义、应用成功才切换修订、部署者可独立提供工具同步到当前共识。单机 SQLite、具体插件拆包和 YAML 键值保留为部署或格式示例。[归档设计](design.md#instance-home) · [逐插件示例](../../../../design-review.md#packages)
+
+<a id="note-decision"></a>
+
+## 2026-11-24 · 补充 Session Note 与工具原文
+
+用户希望从 Session 找到 Event，再从该 Event 找回工具原文。较大的文本由宿主保存为只读 Note，给模型的结果可以只带预览和稳定引用。原事件与调用记录保留这份引用，压缩、重复回执或更换 worker 后仍可读回同一版本。模型也可显式用 `write_note(description, body)` 新建工作笔记。两种 Note 按会话和来源权限读取，继承了分支引用的读者按其当前授权访问。
+
+用户确认 `search_notes` 在已授权的 Note 描述上做区分大小写的字面 grep，按创建时间倒序列举或返回匹配项。`read_note` 默认返回完整正文，也可指定从 1 起算、两端均含的行范围。请求超过模型预算时，返回超限、正文大小和总行数，模型可自行选择较小行段。读取操作不再触发自动外置。Markdown 存在云端各 worker 共享挂载的 `artifacts/notes/<session-id>/<note-id>.md`，YAML 文件头记录 `description`、`created_at` 和保存时统计的正文行数。
+
+讨论开始时 Git 基线为 `4e24402fa95c680a8f3e4405a620a6385c2d39a8`。当前共识文件的 SHA-256 由 `50e7ab502597997dcd2bfb3ec129971fc6e2a5bbbac44b3a8846c03e8df77598` 更新为 `c68d925bbd282934ddd9d544d070e6197fd9dbcf44834ba4440a3411cf16282d`。这次同步的是行为设计，运行验收留给实现阶段。[工具层设计与验收](tools.md#large-tool-results) · [现行 Note 规范](../../../../spec/reference/contracts.md#notes)
+
+## 2026-11-24 · 确认云端事件分发后端
+
+此前只确定了逻辑事件总线、独立订阅和按权限分发，本次确认首版采用 Redis Streams 作为默认后端。宿主保留可替换的适配层。插件仍用同一个订阅入口，宿主承担流连接、重发和 ACK。领域状态、Event 和待发布记录在同一状态库事务提交，发布器重试沿用原 `event_id`。消费时以逻辑订阅和事件标识识别重投，将消费状态及引起的 Run 决定和待执行动作一并提交，随后再 ACK。
+
+验收第一步是在领域状态、报告 Event 和发件箱已提交、首次写入 Redis Stream（`XADD`）前停止服务，重启后由发布器补发原事件。第二步是在消费结果与 Run 下一步同事务提交之后、ACK 之前停止服务。再次启动后，同一订阅识别已提交结果并补确认，原 Run 只推进一次，其他订阅仍能独立消费。若 Redis 已收到事件、发件箱尚未标记，也须沿用原 `event_id` 重发。这次选型补全了早期讨论中留待细化的传输方式。[设计归档](design.md#event-distribution) · [分发验收](../../../../spec/goals/v1.md#event-distribution-acceptance)
+
+Git 基线为 `4e24402fa95c680a8f3e4405a620a6385c2d39a8`。同步前后当前共识文件的 SHA-256 分别为 `c68d925bbd282934ddd9d544d070e6197fd9dbcf44834ba4440a3411cf16282d` 和 `e6e0b333d6587886f4fd39d74b33d2e7d4dc76792775b4f6a7f0d8d169864aab`。
+
+## 2026-11-24 · 确认一个 API 与多个执行 worker 的部署方式
+
+用户确认同一 `loom-harness` 程序默认单进程承载 API、发布循环和一个执行 worker，部署者也可以独立启动 N 个执行进程，客户端沿同一逻辑 API 查原 Session 和 Run。worker 按就绪步骤领取工作，等待持久化后可释放执行位置。跨机部署共享权威状态、总线、版本化资源与所需文件。同一订阅组内多个 worker 分工，各独立订阅保留自己的消费进度。用等待外部作业时更换 worker 验证交办可沿原 Run 继续。[归档设计](design.md#worker-pool) · [验收场景](../../../../spec/goals/v1.md#worker-pool-acceptance)
+
+Git 基线为 `4e24402fa95c680a8f3e4405a620a6385c2d39a8`。同步前后当前共识文件的 SHA-256 分别为 `e6e0b333d6587886f4fd39d74b33d2e7d4dc76792775b4f6a7f0d8d169864aab` 和 `e1624050a46f240b30541349b2c08ae729081507b4028943439afe3ff1245411`。
+
+## 2026-11-24 · 确认 Agent 模板、日常回看与自管理
+
+用户确认首版提供普通 `standard` 和创造者 `creator` 两个模板。创建时用模板生成单独的 `agent.yaml`，运行权限受原有授权约束。普通模板要能分别查当前会话历史、直接投给自身的 Agent 收件以及当前 Session 的 Note。创造者还要能在获准范围内读版本文档、改自身配置和实例设置、安装或启停插件，并在下一轮实际调用新工具完成验证。
+
+第三方包可登记 AgentTemplate，还可声明按 Agent、按插件实例解释的配置。模板提供方和配置消费方可以是不同的包，目标实例只经 `ctx.agent_config` 取得自己的生效值。模板升级后，既有 Agent 保留原定义。至此，11 月 23 日曾作为候选讨论的日常回看与授权自管理能力进入本期，具体工具名、包组织及其他扩展操作保留各自的成熟度。[模板设计](design.md#agent-templates) · [当前模板规范](../../../../spec/reference/home.md#agent-templates) · [首版验收](../../../../spec/goals/v1.md#agent-template-acceptance)
+
+Git 基线为 `4e24402fa95c680a8f3e4405a620a6385c2d39a8`。同步前后当前共识文件的 SHA-256 分别为 `e1624050a46f240b30541349b2c08ae729081507b4028943439afe3ff1245411` 和 `559f0eead6b5d2aaa4e13dc31574c57592674063a1948304875549867183cf30`。

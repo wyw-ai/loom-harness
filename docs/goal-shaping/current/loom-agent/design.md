@@ -1,22 +1,42 @@
 # loom-harness 设计共识
 
-loom-harness 的目标是让大模型更好地控制受控端，未来定位为云端 Agent 管理器，自身具备调用大模型的能力。当前先独立设计它的 Agent、Session、Run、事件和消息列表。具体交付范围仍可继续讨论。
+loom-harness 的目标是让大模型通过工具操作受控端。第一期交付一个可通过 API 使用的云端 Agent 服务，由宿主管理 Agent、Session、Run、事件和每轮模型输入。
 
 后续开发以[项目规范](../../../spec/README.md)为入口。[首轮设计归档](../../archive/loom-agent/2026-11-23-initial/overview.md)保存了 2026-11-23 的方案和时序图，2026-11-24 的[普通交办与 Goal 续跑设计](../../archive/loom-agent/2026-11-24-goal-continuation/design.md)补充了交付前的判断。
+
+## 第一期交付目标
+
+普通用户能通过 API 从模板创建 Agent，在一个 Session 中交办工作、领取基于真实工具结果的答复，断线重连后继续追问。例如查询 T42 得到错误码，稍后问“在哪一行”，新的 Run 能沿原报告读到第 280 行，CI 查询总计一次。管理员和创造者在各自授权范围内配置与扩展同一服务。长任务、回执丢失和更换 worker 时，用户仍可追踪原交办及其结果。
+
+第一期按用户视角验收。由 Codex 操作可运行测试实例的 HTTP API，用实际请求与响应、关联的运行记录和外部接收方记录验证已确认场景。各用例保留自己的实测结论，失败或受阻时能查明停在哪一步。普通模板省略模型、等待用户澄清及普通 Run 总预算继续作为待定行为跟踪。[第一期验收标准](../../../spec/goals/v1.md#phase-one-acceptance) · [本轮讨论归档](../../archive/loom-agent/2026-11-24-api-acceptance/design.md)
 
 ## Agent
 
 Agent 是 harness 中承担工作的主体。Agent 定义包含必要的 system prompt，作为调用模型时使用的内置指令。Agent 也需要一段可供了解其职责的简介，简介的格式和填写要求留待确定。
 
+### 从模板创建 Agent
+
+首版提供普通模板 `standard` 和创造者模板 `creator`，第三方插件也可以提供 AgentTemplate。每个不可变包版本在 `plugin.yaml` 的 `agent_templates` 中列出 `templates/agents/*.yaml`。`AgentTemplate.spec` 复用 Agent 定义字段。调用方可查看可用模板的 ID、简介、来源和包版本，再选定版本、指定新 Agent ID，生成一份独立的 `agent.yaml`。已有 Agent 保留自己的配置，后续创建可选择新模板版本。[模板清单与示例](../../../spec/reference/home.md#agent-templates)
+
+普通 Agent 可以查询自身定义、当前 Session 的历史、直接投给自身 Agent Inbox 的事实，并在当前 Session 写入、检索、读取 Note。两条查询分别按实际会话及收件目标取数，宿主从调用上下文确定当前身份。创造者额外具备开发和管理能力，可查生效版本和随包文档，编写、安装、在获准范围启停插件，修改自身绑定和获准的实例配置，并预览上下文。验证新工具时，应从下一轮实际目录调用，沿 ToolCall 核实执行版本和结果。工具集绑定说明角色可用的操作，每次管理或派发仍受调用者的实际授权约束。
+
+模板示例中，普通 Agent 绑定 `loom.daily`，创造者再绑定 `plugins.authoring` 和 `loom.self_management`。这些工具集名及管理工具名可随接口定版，角色能力和授权边界按上述行为验收。
+
+消费配置的插件包独立声明 `agent_config_schema`，其他提供方的模板也可预填相应字段。创建时按目标插件实例校验 `spec.extensions.<instance-id>`，宿主调用该实例时，只将当前 Agent 对应修订的那份数据传入其 `ctx.agent_config`。实例 Settings 继续由实例管理。同包的其他实例、同一实例处理的其他 Agent 各有自己的配置范围。
+
 ### Tool 与工具接入
 
-Agent 可调用的操作统一称为 Tool。harness 支持内置 Tool 和 Lua 插件提供的 Tool。Lua 插件既可以直接实现工具，也可以接入外部工具来源。MCP 采用后一种方式：Lua 插件负责 MCP 服务的连接与协议交互，并将服务提供的工具暴露为 Tool。后续可通过新增插件支持其他工具接入方式，沿用相同的 Tool 调用契约。
+Agent 可调用的操作统一称为 Tool。harness 支持内置工具。Lua 插件可直接提供工具，也可接入其他来源。例如 MCP 插件负责远程连接与协议交互，将发现的操作登记为 Tool。部署者还可以在实例 HOME 中用 YAML 和 Lua 单独定义工具，由工具管理插件登记。Agent 按稳定 ID 绑定这些工具，各来源使用相同的注册和调用契约。
 
-本期默认通过 Code Mode 调用工具。模型本轮可用的业务工具中，只有显式标记为不走 Code Mode 的工具才直接列入模型请求的原生工具列表。这些例外工具只走直接调用。内置工具、Lua 插件工具和 MCP 插件接入的工具采用同一规则。Code Mode 自身需要一个模型能直接调用的入口。工具集的登记形式、字段名和模型脚本语言见[工具层方案草稿](../../archive/loom-agent/2026-11-23-initial/tools.md)，细节待评审。
+本期工具来源接入覆盖 MCP 与自定义 Lua 工具，Skill 接入暂缓。MCP 插件在相同的远端授权范围内完整发现工具后，按连接一次更新目录。HOME 工具的定义与脚本一起形成修订。包内工具由包入口登记。三类来源的 ToolCall 都固定本次执行者与版本，派发时复核当前授权，回执按原调用接回。[工具来源设计归档](../../archive/loom-agent/2026-11-24-tool-sources/design.md)
+
+部署者可以在工具管理实例中维护显式成员表，组合来自不同来源的工具。Agent 可绑定整组或单项。宿主按稳定 ID 去重，并按本轮授权、来源状态与绑定开启状态生成目录。初次应用时，明确不存在的成员使该修订无法生效，待发现的远端引用保留为待解析。生效后某个来源失联，集合保留该引用，其他获准成员仍可使用。撤下集合只撤其绑定与共用说明。[混合工具集规则](../../../spec/reference/tool-sources.md#mixed-toolset)
+
+本期默认通过 Code Mode 调用工具。模型本轮可用的业务工具中，只有显式标记为不走 Code Mode 的工具才直接列入模型请求的原生工具列表。这些例外工具只走直接调用。所有来源的工具采用同一规则。Code Mode 自身需要一个模型能直接调用的入口。工具集的登记形式、字段名和模型脚本语言见[工具层方案草稿](../../archive/loom-agent/2026-11-23-initial/tools.md)，细节待评审。
 
 ### Skill
 
-Agent 需要支持 Skill。本期暂缓官方 `read_skill` 工具。接入 Skill 的插件可以从本地 `SKILL.md` 读取名称和简介，通过 section 供模型发现技能，也可以自行提供按需读取正文的工具。Agent 如何关联可用技能仍待细化。
+Skill 留作后续接入需求。已有方向是由插件从本地 `SKILL.md` 读取名称和简介，通过 section 供模型发现，并可提供按需读取正文的工具。Agent 如何关联可用技能仍待细化，官方 `read_skill` 继续暂缓。
 
 ### System prompt section
 
@@ -40,6 +60,12 @@ loom-harness 提供可组合的上下文与 Agent 管理能力。外部应用决
 
 官方会话分支插件名为 `branch`。它从指定历史位置创建一个可以独立继续的子 Session。见[会话分支设计](../../archive/loom-agent/2026-11-23-initial/design.md#session-branch)。
 
+### Note 与大段文本
+
+Agent 可用 `write_note(description, body)` 在当前 Session 新建 Markdown Note，保存于实例 HOME。超出存储阈值的工具文本由宿主自动保存为 Note，原回执保留预览和稳定的 `note_ref`。Session 历史和结果 Event 可以引用同一份正文版本，换 worker 后仍可按原引用回读。图片及二进制附件继续按原有附件契约处理。
+
+`search_notes(keyword?, cursor?, limit?)` 在当前 Session 中按描述做字面子串检索，省略关键词时按创建时间倒序列出有权读取的 Note，只返回元数据。`read_note(note_ref, start_line?, end_line?)` 默认读完整正文，也可只指定起始行、结束行或两者。行号从正文第 1 行起算，包含两端，文件头不占行号。如果请求范围超过本次模型预算，返回超限及正文大小、总行数，调用方可缩小范围。此次读取不会再次自动生成 Note。[写入、检索与读取契约](../../../spec/reference/contracts.md#notes)
+
 ### Rust 核心与 Lua 插件
 
 harness 的主要运行逻辑由 Rust 实现。核心定义扩展点，并通过 `PluginProvider` 加载插件和调用插件登记的处理函数。扩展点的输入、结果和错误由宿主定义。本期仅交付 `LuaPluginProvider`，在 Rust worker 进程内执行 Lua。Lua 值和解释器状态的转换由这个实现负责。后续可在同一接口下接入其他插件载体。
@@ -54,6 +80,10 @@ harness 的主要运行逻辑由 Rust 实现。核心定义扩展点，并通过
 
 外部客户端可以通过 REST 风格的 API 定义和管理 Agent、MCP 接入配置和插件。每个插件都可以选择为自己管理的资源提供对外服务。一个 harness 实例实际提供的 API 随启用的插件而变化。例如，启用任务插件后，客户端可以在同一 harness 服务下创建和查询任务。MCP 接入配置的资源语义由 MCP 插件定义。具体路径、服务的挂载方式和发现接口留待细化。
 
+### 输入框推荐
+
+客户端可在 Agent 答复送达后向插件请求一条下一句建议。插件只读采样调用者获准查看的当前会话版本，结果可以为空。推荐过期或权限已撤回时不展示。采用建议只填入输入框，用户发送时才产生一次真实投递。[设计与调用示例](../../archive/loom-agent/2026-11-23-initial/design.md#composer-suggestions)
+
 ### 投递安排
 
 在实际投递与目标 Inbox 之前，harness 提供独立的一层，统一支持直接、定时和条件投递，并允许插件扩展。用户通过 REST API 管理配置，也可以授权 Agent 通过这一层的工具管理同一份配置。接入新的数据源后，可以选择该来源，将事件直接投递或按条件投递。Webhook 是后续接入的例子。用户可以编写脚本，自定义投递条件及命中后如何投递。通过 API 或 Agent 工具管理的都是该安排上的同一份规则。资源名称、字段与各类投递的组合方式见[投递安排草案](../../archive/loom-agent/2026-11-23-initial/overview.md#message-ingress)。
@@ -64,7 +94,13 @@ harness 的主要运行逻辑由 Rust 实现。核心定义扩展点，并通过
 
 ### 统一 Settings
 
-harness 提供统一的 settings 注册与管理机制。插件可以声明自己的配置项，宿主在 `/settings/{plugin}` 下提供 REST 配置服务，沿用项目的 `/api` 前缀后完整路径为 `/api/settings/{plugin}`。宿主在构建插件调用上下文时，将生效的配置值提供给 `ctx`。配置作用域、读取形式和变更生效时机在草稿中细化。
+harness 提供统一的 settings 注册与管理机制。插件包声明配置项，实例保存自己的设置。宿主通过 `/api/settings/{plugin}` 管理对应实例的配置，构建调用上下文时将该次生效的配置值提供给 `ctx`。调用重试或异步接续时沿用原调用固定的设置版本。
+
+### 实例 HOME 与资源生效
+
+每个 loom-harness 实例有自己的 `LOOM_HOME`。包作者维护带版本的插件实现，部署者在独立实例目录选定包版本、配置 settings 和具名资源。一个 MCP 实例可以有多条独立连接。Agent、独立工具、投递安排各自维护 YAML 定义及引用的脚本。Run 等待、Goal 进度和调用回执由宿主持久保存，大型产物按授权引用读取。[目录与资源归属](../../../spec/reference/home.md)
+
+YAML 文件和 JSON REST 读写同一份资源。宿主按期望修订核对并发修改，校验定义、引用、脚本和权限，成功应用后才切换生效修订。失败时保留原生效版本并提供诊断。可以从 ToolCall 查到实际执行的修订，换 worker 后沿原调用接续。具体分包、示例键名和部署用的存储后端保留选择空间。[原讨论补充](../../archive/loom-agent/2026-11-23-initial/design.md#instance-home)
 
 ## 云端执行的暂定方向
 
@@ -72,7 +108,11 @@ harness 提供统一的 settings 注册与管理机制。插件可以声明自�
 
 逻辑事件总线承载外部输入与内部运行事实。事件送达后，按目标和关联找到相应的材料、调用或交办。worker 接手已有 Run 时，读取它的当前状态和已到的相关事实，同一 Run 按顺序提交决定。可以一次处理同一等待的多份回执，也可以直接派发已获准的动作、继续等待或完成交付。只有需要模型判断时，才由触发策略申请推理，输入策略据此组装该轮 message list。两项策略都走插件机制。[推理触发与输入组装](../../archive/loom-agent/2026-11-23-initial/design.md#model-event-policies)
 
-等待工具、到时复查或等待用户批准，都可以释放 worker。Run 保留正在等的对象和接下来获准做的动作。真实回执或授权决定通过事件接回原调用，重启后仍可接续同一交办。异步工具按它承诺的结果判定完成，Run 则按交办的交付约定判断何时结束。需要通知时，由答复交付器跟进已准备好的结果；一次交付重试沿用原答复。总线的存储、传输及对外托管订阅的范围仍待细化。
+本期采用 Redis Streams 作为默认事件总线。宿主将业务事实与待发布记录一起持久提交，按稳定的 `event_id` 分发。独立订阅各自记录处理进度，在业务处理结果持久提交后才确认消息。重复送达时，各订阅依自己的处理记录接续。部署可替换总线实现，插件沿用同一套事件订阅接口。对外托管通用订阅的范围仍待定。[事件分发与恢复](../../../spec/architecture/runtime.md#event-distribution)
+
+客户端通过一个逻辑 API 交办和查询工作。默认启动一个 `loom-harness` 进程，同时承担 API 和执行职责，执行池有一个 worker。部署时可调整 worker 数量，也可用同一程序分开运行 API 与执行职责。worker 领取已就绪的 Run 步骤，同一订阅的多个 worker 竞争处理该订阅的事件。不同 Run 的就绪步骤可并行，同一 Run 按状态版本提交推进决定。长等待释放执行名额，条件满足后由可用 worker 接手。[执行池与部署](../../../spec/architecture/runtime.md#worker-pool)
+
+等待工具、定时复查或用户批准时，Run 保留正在等的对象和接下来获准做的动作。真实回执或授权决定通过事件接回原调用，重启后仍可接续同一交办。异步工具按它承诺的结果判定完成，Run 则按交办的交付约定判断何时结束。需要通知时，由答复交付器跟进已准备好的结果，一次交付重试沿用原答复。
 
 换 worker 时，若外部服务可能已创建作业、首个受理回执却丢失，宿主按原 ToolCall 核实。只有外部服务保证同一有效键与原参数仍对应同一作业时才可重交。查询和安全重交均不可行时保留“结果待核实”，Goal 沿用此状态。[首个受理回执丢失的恢复与验收](../../archive/loom-agent/2026-11-23-initial/tools.md#lost-acceptance-receipt)
 

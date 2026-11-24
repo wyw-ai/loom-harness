@@ -1,0 +1,70 @@
+# A01 / A02 普通用户请求本。每个 ### 块单独发送并检查响应。
+# 在 HTTP 客户端私有环境提供 baseUrl、authorization（完整 Authorization 头值）。
+# 按测试实例公布的 schema 配置两个单行 JSON 变量：
+# agentCreateBody 选定 standard 的来源和版本、新 Agent ID、获准的模型；
+# sessionCreateBody 创建会话并按实际契约选定该 Agent 为响应者。
+# userEventBody 是该实例用户输入来源接受的单行 JSON，含本例的消息及唯一来源事件 ID。
+# sessionId、eventId、deliveryId、runId、modelCallId 均从上一步真实响应取得。
+# 若实例在投递时选择响应 Agent，则在投递 JSON 按该实例契约补上刚创建的 Agent。
+# 路由与动作名来自候选契约，联调时使用该构建实际公布的等价操作。
+
+### 查看可用模型
+GET {{baseUrl}}/api/models
+Authorization: {{authorization}}
+
+### 以 U 创建普通 Agent
+POST {{baseUrl}}/api/agents
+Authorization: {{authorization}}
+Content-Type: application/json
+
+{{agentCreateBody}}
+
+### 创建 U 的 Session，记下 sessionId
+POST {{baseUrl}}/api/sessions
+Authorization: {{authorization}}
+Content-Type: application/json
+
+{{sessionCreateBody}}
+
+### 上报一条真人消息，记下 eventId
+POST {{baseUrl}}/api/events
+Authorization: {{authorization}}
+Content-Type: application/json
+
+{{userEventBody}}
+
+### 向原 Session 发起新交办，记下 deliveryId。重试原投递时沿用同一个 deliveryKey
+POST {{baseUrl}}/api/events/{{eventId}}/deliveries
+Authorization: {{authorization}}
+Content-Type: application/json
+Idempotency-Key: {{deliveryKey}}
+
+{"target":{"session_id":"{{sessionId}}"},"action":"start_run"}
+
+### 查询受理，取得 runId。还没消费时继续查询此投递
+GET {{baseUrl}}/api/event-deliveries/{{deliveryId}}
+Authorization: {{authorization}}
+
+### 查询 Run 等待、终态及交付结果
+GET {{baseUrl}}/api/runs/{{runId}}
+Authorization: {{authorization}}
+
+### 重连后从同一 Session 再找到这项交办
+GET {{baseUrl}}/api/sessions/{{sessionId}}/runs
+Authorization: {{authorization}}
+
+### 读回真实消息及回执。A02 结束后沿同一 sessionId 提交追问，换新的 eventId 与 deliveryKey
+GET {{baseUrl}}/api/sessions/{{sessionId}}/context/items
+Authorization: {{authorization}}
+
+### 以下三项以获准审查该 Run 的身份发送，reviewAuthorization 来自私有环境
+GET {{baseUrl}}/api/runs/{{runId}}/model-calls
+Authorization: {{reviewAuthorization}}
+
+### 查这次推理实际使用的输入或可读引用
+GET {{baseUrl}}/api/model-calls/{{modelCallId}}
+Authorization: {{reviewAuthorization}}
+
+### 对照外层、子 ToolCall 和外部 CI 接收方记录
+GET {{baseUrl}}/api/runs/{{runId}}/tool-calls
+Authorization: {{reviewAuthorization}}
