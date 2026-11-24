@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 mod openapi;
 mod stream;
+mod webui;
 
 type ApiResult = Result<Value, ApiError>;
 struct ApiError(StatusCode, String);
@@ -50,6 +51,9 @@ fn catalog_err(s: String) -> ApiError {
 }
 pub fn router(app: App) -> Router {
     Router::new()
+        .route("/webui", axum::routing::get(webui::serve))
+        .route("/webui/", axum::routing::get(webui::serve))
+        .route("/webui/{*asset}", axum::routing::get(webui::serve))
         .fallback(handle)
         .layer(DefaultBodyLimit::max(12 * 1024 * 1024))
         .with_state(app)
@@ -86,7 +90,23 @@ async fn handle(
     let path = path
         .strip_prefix("/api/")
         .ok_or(ApiError(StatusCode::NOT_FOUND, "unknown route".into()))?;
-    let parts = path.trim_end_matches('/').split('/').collect::<Vec<_>>();
+    let decoded = path
+        .trim_end_matches('/')
+        .split('/')
+        .map(|part| {
+            let part = percent_encoding::percent_decode_str(part)
+                .decode_utf8()
+                .map_err(|_| bad("invalid UTF-8 in path"))?;
+            if part.contains(['/', '\\', '\0']) {
+                return Err(bad("invalid path component"));
+            }
+            Ok(part)
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let parts = decoded
+        .iter()
+        .map(|part| part.as_ref())
+        .collect::<Vec<&str>>();
     let q: HashMap<String, String> = serde_urlencoded::from_str(uri.query().unwrap_or(""))
         .map_err(|_| bad("invalid query parameters"))?;
     let key = headers.get("idempotency-key").and_then(|h| h.to_str().ok());
@@ -121,6 +141,64 @@ async fn route(
         return Ok(v);
     }
     match (method, p) {
+        ("GET", ["identity"]) => Ok(
+            json!({"owner":o,"subject":who.subject.as_deref().unwrap_or(o),"admin":who.admin,"approve":who.approve,"source":who.source}),
+        ),
+        ("GET", ["catalog", "packages"]) => {
+            if !who.admin {
+                return Err(deny());
+            }
+            app.catalog.package_index().map_err(catalog_err)
+        }
+        ("GET", ["catalog", group @ ("tools" | "toolsets")]) => {
+            if !who.admin {
+                return Err(deny());
+            }
+            app.catalog
+                .catalog_entries(if *group == "tools" { "tool" } else { "toolset" })
+                .map_err(catalog_err)
+        }
+        ("POST", ["catalog", group @ ("tools" | "toolsets")])
+        | ("PATCH", ["catalog", group @ ("tools" | "toolsets"), _]) => {
+            if !who.admin {
+                return Err(deny());
+            }
+            app.catalog
+                .write_home_entry(
+                    if *group == "tools" { "tool" } else { "toolset" },
+                    p.get(2).copied(),
+                    &body,
+                )
+                .map_err(catalog_err)
+        }
+        ("GET", ["sessions", session, "notes"]) => {
+            db.get(o, "session", session)?;
+            let limit = numeric_query(q, "limit")?.unwrap_or(30).min(200);
+            let page = app
+                .notes
+                .search(
+                    session,
+                    q.get("keyword").map(String::as_str),
+                    q.get("cursor").map(String::as_str),
+                    limit,
+                )
+                .map_err(note_error)?;
+            Ok(json!(page))
+        }
+        ("GET", ["sessions", session, "notes", id]) => {
+            db.get(o, "session", session)?;
+            let note = app
+                .notes
+                .read(
+                    session,
+                    &format!("note:{session}:{id}"),
+                    numeric_query(q, "start_line")?,
+                    numeric_query(q, "end_line")?,
+                    usize::MAX,
+                )
+                .map_err(note_error)?;
+            Ok(json!(note))
+        }
         ("GET", ["openapi.json"]) => Ok(openapi::document(
             app.catalog
                 .plugin_routes(o, who.admin)
@@ -436,6 +514,26 @@ async fn route(
             .map_err(catalog_err),
     }
 }
+fn numeric_query(q: &HashMap<String, String>, name: &str) -> Result<Option<usize>, ApiError> {
+    q.get(name)
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| bad(format!("invalid {name}")))
+        })
+        .transpose()
+}
+
+fn note_error(error: std::io::Error) -> ApiError {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::NotFound => ApiError(StatusCode::NOT_FOUND, "note not found".into()),
+        ErrorKind::PermissionDenied => deny(),
+        ErrorKind::InvalidInput => bad(error.to_string()),
+        _ => ApiError(StatusCode::INTERNAL_SERVER_ERROR, "cannot read note".into()),
+    }
+}
+
 async fn suggestion(app: &App, who: &Identity, s: &str, body: &Value) -> ApiResult {
     let owner = who.owner.as_str();
     let subject = who.subject.as_deref().unwrap_or(owner);

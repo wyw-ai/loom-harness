@@ -72,10 +72,43 @@ pub struct Compacted {
     pub covered: Vec<(usize, usize)>,
 }
 
-fn bytes(messages: &[Value]) -> usize {
-    serde_json::to_vec(messages)
-        .expect("JSON values must serialize")
-        .len()
+fn text_view(message: &Value) -> std::borrow::Cow<'_, Value> {
+    use std::borrow::Cow;
+    let Some(parts) = message["content"].as_array() else {
+        return Cow::Borrowed(message);
+    };
+    if !parts.iter().any(|p| p["type"] == "image_url") {
+        return Cow::Borrowed(message);
+    }
+    let mut result: serde_json::Map<_, _> = message
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k.as_str() != "content")
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let text = parts
+        .iter()
+        .map(|part| {
+            if part["type"] == "image_url" {
+                json!({"type":"text","text":"[image attachment]"})
+            } else {
+                part.clone()
+            }
+        })
+        .collect();
+    result.insert("content".into(), Value::Array(text));
+    Cow::Owned(Value::Object(result))
+}
+
+/// Budget the textual message projection. Encoded image payloads are sent as
+/// native vision input; treating base64 as prompt text would discard ordinary screenshots.
+pub fn input_bytes(messages: &[Value]) -> usize {
+    2 + messages.len().saturating_sub(1)
+        + messages
+            .iter()
+            .map(|m| text_view(m).to_string().len())
+            .sum::<usize>()
 }
 
 fn compressible_range(messages: &[Value]) -> Option<(usize, usize)> {
@@ -118,7 +151,7 @@ fn compressible_range(messages: &[Value]) -> Option<(usize, usize)> {
             pending.clear();
             continue;
         }
-        run_size += bytes(std::slice::from_ref(m));
+        run_size += input_bytes(std::slice::from_ref(m));
         if pending.is_empty() && run_size > best_size {
             best = Some((run_start, i + 1));
             best_size = run_size;
@@ -137,7 +170,7 @@ pub async fn compact(
     max_input_bytes: usize,
     prompt: &str,
 ) -> Result<Compacted, ModelError> {
-    if bytes(messages) <= max_input_bytes {
+    if input_bytes(messages) <= max_input_bytes {
         return Ok(Compacted {
             messages: messages.to_vec(),
             covered: vec![],
@@ -153,7 +186,7 @@ pub async fn compact(
     let material: Vec<_> = messages[start..end]
         .iter()
         .map(|m| {
-            let mut item = m.clone();
+            let mut item = text_view(m).into_owned();
             if let Some(obj) = item.as_object_mut() {
                 obj.remove("reasoning_content");
             }
@@ -172,7 +205,7 @@ pub async fn compact(
     }
     let mut output = messages.to_vec();
     output.splice(start..end,[json!({"role":"assistant","source":"compaction","content":format!("此前历史摘要：{}",reply.content.unwrap_or_default())})]);
-    if bytes(&output) > max_input_bytes {
+    if input_bytes(&output) > max_input_bytes {
         return Err(ModelError::invalid(
             "compacted model input still exceeds its budget",
         ));
@@ -217,5 +250,17 @@ mod tests {
             json!({"role":"user","content":"current"}),
         ];
         assert_eq!(compressible_range(&h), Some((1, 4)));
+    }
+
+    #[test]
+    fn compaction_accounts_for_image_references_without_transcribing_base64() {
+        let image = json!({"role":"user","source_event_id":"evt","content":[
+            {"type":"text","text":"Screen capture"},{"type":"image_url","image_url":{"url":format!("data:image/png;base64,{}","A".repeat(300_000))}}]});
+        let projected = text_view(&image);
+        assert_eq!(projected["source_event_id"], "evt");
+        assert_eq!(projected["content"][0]["text"], "Screen capture");
+        assert_eq!(projected["content"][1]["text"], "[image attachment]");
+        assert!(!projected.to_string().contains("base64"));
+        assert!(input_bytes(&[image]) < 256);
     }
 }

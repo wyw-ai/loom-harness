@@ -1,0 +1,9 @@
+apiVersion: loom/v1alpha1
+kind: PluginPackage
+id: webui
+version: "1.1.0"
+entrypoint: plugin.lua
+description: A browser client for Loom conversations and agent management.
+webui:
+  path: /webui/
+  assets: [index.html, app.css, app.js, desk.js]

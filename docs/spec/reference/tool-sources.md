@@ -1,6 +1,6 @@
 # MCP 与自定义 Lua 工具的接入
 
-MCP 连接、HOME 独立 Lua 工具和插件自带 Lua 工具通过同一注册与派发契约进入 Loom。Agent 可以绑定一个 Tool，也可以绑定跨来源的 Toolset。每个 Tool 有唯一执行者，每次 ToolCall 都能查回所用的来源、配置、参数和结果。此接入范围暂缓 Skill。协议组合、配置键名和实例级 Toolset 的物理路径均保留为候选。[HOME 资源规范](home.md) · [工具接入设计归档](../../goal-shaping/archive/loom-agent/2026-11-24-tool-sources/design.md)
+MCP 连接、HOME 独立 Lua 工具和插件自带 Lua 工具通过同一注册与派发契约进入 Loom。Agent 可以绑定一个 Tool，也可以绑定跨来源的 Toolset。每个 Tool 有唯一执行者，每次 ToolCall 都能查回所用的来源、配置、参数和结果。首版覆盖 MCP 与 Lua，内部工具插件的 OI Service 自动接入另有独立规范。协议组合、配置键名和实例级 Toolset 的物理路径均保留为候选。[HOME 资源规范](home.md) · [工具接入设计归档](../../goal-shaping/archive/loom-agent/2026-11-24-tool-sources/design.md) · [OI Service 接入目标](../goals/oi-workspace-tools.md)
 
 ## 工具身份与注册
 
@@ -9,6 +9,7 @@ MCP 连接、HOME 独立 Lua 工具和插件自带 Lua 工具通过同一注册�
 | HOME 独立 Lua 工具 | 工具管理插件装载 `tools/<local-id>/tool.yaml` 及其同目录处理函数。`home` 是保留的来源命名空间，例如 `home.check_release_tag`。 | 工具定义、处理函数及其共同的代码修订。 |
 | 插件自带 Lua 工具 | 插件入口登记工具，身份包含插件实例和本地名，例如 `release-tools.report`。包的多个实例可以分别装配。 | 所属实例、包版本、处理函数及实例配置修订。 |
 | MCP 工具 | MCP 插件按连接发现并转换。身份包含插件实例、连接和区分大小写的远端原名，例如 `mcp.ci.get_report`。 | 来源内部身份、连接修订、实例配置版本、远端原名和发现时的签名。 |
+| OI Service 成员（已封板，待实现） | 官方内部工具插件按实例、Service 和成员定位，例如 `oi-office.workbench.capture_a`。模型直接调用 `capture_a`。 | Service 成员的生效绑定、对应远端签名和当次实际传输，本期为 MCP。[OI 同步与命名契约](oi-workspace-tools.md) |
 
 宿主保存标识的原始分量，可读 ID 的编码须能区分分量内的点号等分隔符。不同服务都叫 `search` 时，注册表可按各自的实例和连接定位。MCP 的展示标题变化不改变工具身份，远端原名变化则撤下旧名并登记新名。删除并以同名重建连接产生新的来源身份，历史调用仍指向原来源。模型供应商限制函数名时，ModelCall 保存可逆的名称映射。[MCP 工具命名](https://modelcontextprotocol.io/specification/2026-07-28/server/tools#tool-names)
 

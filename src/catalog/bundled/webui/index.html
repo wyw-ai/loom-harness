@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#faf9fb">
+  <title>Loom 工作台</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="desk.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#prompt">跳到消息输入框</a>
+  <div class="workspace">
+    <aside id="sidebar" aria-label="工作台导航">
+      <div class="brand">
+        <span class="loom-mark" aria-hidden="true"></span>
+        <span>Loom</span>
+        <button id="sidebar-close" class="icon-button" type="button" aria-label="关闭会话导航">
+          <span class="icon icon-close" aria-hidden="true"></span>
+        </button>
+      </div>
+      <button id="new-session" type="button">
+        <span class="icon icon-plus" aria-hidden="true"></span>新建会话
+      </button>
+      <nav id="desk-nav" aria-label="管理与追踪"></nav>
+      <div class="agent-picker">
+        <label class="section-label" for="agent-select">当前 Agent</label>
+        <div class="select-wrap">
+          <select id="agent-select" disabled>
+            <option>请选择 Agent</option>
+          </select>
+        </div>
+        <button id="create-agent" class="text-button" type="button" hidden>创建标准 Agent</button>
+      </div>
+      <nav class="history" aria-labelledby="history-label">
+        <h2 id="history-label" class="section-label">最近会话</h2>
+        <ul id="session-list"></ul>
+      </nav>
+    </aside>
+    <button id="sidebar-scrim" type="button" aria-label="关闭导航" tabindex="-1"></button>
+    <main>
+      <header class="thread-header">
+        <button id="sidebar-toggle" class="icon-button" type="button" aria-label="会话导航" aria-expanded="false" aria-controls="sidebar">
+          <span class="icon icon-menu" aria-hidden="true"></span>
+        </button>
+        <span class="icon icon-thread" aria-hidden="true"></span>
+        <h1 id="thread-title">新会话</h1>
+        <span id="desk-title" class="desk-bar-title"></span>
+        <button id="session-details" class="desk-button" hidden type="button">会话详情</button>
+        <button id="connection-button" type="button" aria-haspopup="dialog">
+          <span class="icon icon-account" aria-hidden="true"></span>
+          <span id="connection-state">连接账户</span>
+        </button>
+      </header>
+      <section id="desk-panel" aria-labelledby="desk-heading" hidden>
+        <div class="desk-inner">
+          <div class="desk-location">
+            <button id="desk-chat" type="button" class="desk-link">返回对话</button>
+            <button id="desk-back" type="button" class="desk-link" hidden>‹ 上一级</button>
+            <button id="desk-refresh" type="button" class="desk-refresh">刷新</button>
+          </div>
+          <h2 id="desk-heading" tabindex="-1"></h2>
+          <p id="desk-status" role="status"></p>
+          <div id="desk-content"></div>
+        </div>
+      </section>
+      <div id="conversation-scroll">
+        <div id="empty-state">
+          <div class="empty-emblem" aria-hidden="true"><span class="loom-mark"></span></div>
+          <h2 id="empty-title">想一起处理什么？</h2>
+          <p id="empty-description">给 Agent 发一条消息，开始这段对话。</p>
+          <button id="empty-action" type="button">连接账户</button>
+          <div id="capability-prompts" aria-label="对话建议" hidden></div>
+        </div>
+        <div id="messages" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions"></div>
+      </div>
+      <div class="composer-area">
+        <div id="status" role="status" aria-live="polite"></div>
+        <button id="suggested-draft" class="capability-prompt" type="button" hidden></button>
+        <form id="composer">
+          <label class="visually-hidden" for="prompt">消息</label>
+          <textarea id="prompt" name="message" rows="2" placeholder="给 Agent 发消息…" aria-describedby="send-hint"></textarea>
+          <div id="compose-chips"></div>
+          <div class="composer-actions">
+            <div class="composer-tools">
+              <button class="compose-tool" type="button" id="attach-image" title="添加图片">＋ 图片</button>
+              <input id="image-picker" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+              <button class="compose-tool" type="button" id="goal-toggle" aria-pressed="false" title="以本条消息作为目标启动">目标</button>
+              <button class="compose-tool" type="button" id="suggest-next" title="根据上一条回复生成可编辑草稿" hidden>推荐</button>
+            </div>
+            <span id="send-hint"><kbd>Enter</kbd> 发送<span class="hint-divider" aria-hidden="true">·</span><kbd>Shift + Enter</kbd> 换行</span>
+            <button id="send" type="submit" aria-label="发送消息" title="发送消息" disabled>
+              <span class="icon icon-up" aria-hidden="true"></span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+  <dialog id="desk-dialog"><form id="desk-form"></form></dialog>
+  <dialog id="credential-dialog" aria-labelledby="credential-title" aria-describedby="credential-description">
+    <form id="credential-form">
+      <div class="dialog-heading">
+        <span class="dialog-icon" aria-hidden="true"><span class="icon icon-account"></span></span>
+        <button id="credential-close" class="icon-button" type="button" aria-label="关闭账户连接设置">
+          <span class="icon icon-close" aria-hidden="true"></span>
+        </button>
+      </div>
+      <h2 id="credential-title">连接账户</h2>
+      <p id="credential-description">使用 Loom 账户的 Bearer 令牌访问你的 Agent 和会话。</p>
+      <label for="token-input">Bearer 令牌</label>
+      <input id="token-input" name="token" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴账户令牌">
+      <p id="credential-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="logout" class="text-button" type="button" hidden>断开连接</button>
+        <button id="credential-save" type="submit">连接账户</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

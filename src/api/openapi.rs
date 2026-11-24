@@ -1,6 +1,9 @@
 use serde_json::{Value, json};
 
 const PUBLIC: &[(&str, &str)] = &[
+    ("identity", "get"),
+    ("sessions/{id}/notes", "get"),
+    ("sessions/{id}/notes/{note_id}", "get"),
     ("models", "get"),
     ("agent-templates", "get"),
     ("agents", "get post"),
@@ -53,7 +56,13 @@ const ADMIN: &[(&str, &str)] = &[
     ("settings/{instance}/schema", "get"),
     ("catalog/apply", "post"),
     ("catalog/diagnostics", "get"),
-    ("catalog/tools", "get"),
+    ("catalog/packages", "get"),
+    ("catalog/tools", "get post"),
+    ("catalog/tools/{id}", "patch"),
+    ("catalog/toolsets", "get post"),
+    ("catalog/toolsets/{id}", "patch"),
+    ("plugins/{instance}/refresh", "post"),
+    ("plugins/{instance}/discovery", "get"),
     ("catalog/tools/{tool}/versions/{revision}", "get"),
     ("mcp/connections", "get post"),
     ("mcp/connections/{instance}/{connection}", "get patch"),

@@ -12,6 +12,22 @@ $env:LOOM_REDIS_URL = 'redis://127.0.0.1:6379/'
 cargo run --locked
 ```
 
+### 浏览器工作台
+
+启动服务后打开 [WebUI](http://127.0.0.1:7331/webui/)，用上面配置的用户令牌连接，选择 Agent 并开始对话。令牌仅保留在当前页面内存中。刷新后重新连接即可读回服务端保存的会话。
+
+空会话会按 Agent 当前获准使用的工具显示示例。点击示例会填入草稿，发送后才会产生用户消息。例如可以让普通 Agent 查找当前会话的笔记，也可以让已获 `agents.update` 授权的创造者「把你自己的描述改成『负责整理构建日志』」。后者通过正常的 Run 调用工具并保存 Agent 修订。创造者模板的写权限由管理员通过 grants 单独授予。
+
+页面由默认启用的官方 `webui` 插件提供。管理员可以通过 `PATCH /api/plugins/webui` 设置 `{"enabled":false}` 关闭页面入口，已有会话仍保存在服务端。
+
+侧栏提供 Agent、工具目录、运行、事件、调度和宿主入口。管理员还可管理插件实例、版本、设置、MCP 连接和 HOME 中的独立工具与工具集。在 Agent 详情修改配置或通过「与 Agent 对话」交给已获授权的创造者修改，两种操作都能在同一份 Agent spec 核实。Run 详情列出实际使用的模型消息、工具、回执和时序。旧 HOME 中官方聊天插件 `webui@1.0.0` 会升级到工作台 `1.1.0`，升级保留实例的启停状态。
+
+### 接入 Loom OI
+
+在 OIS 发布目录 Service 和工作 Service 后，管理员用官方包 `internal-tools@1.0.0` 创建实例，填入 OIS 地址和凭据引用。在「插件」检查发现结果，然后在 Agent 详情授予并选择对应工具集。例如 `office.workbench` 的成员 `view_on_a` 在模型请求中仍叫 `view_on_a`。使用读图能力时，请为 Agent 配置支持图片的模型路由（`images: true`）。从 ToolCall 的 `oi_call_id` 和 `binding.source` 可以定位目标主机上的调用。[实例设置、凭据与 Agent YAML](docs/spec/reference/oi-workspace-tools.md)
+
+### 通过 API 发送消息
+
 从另一个终端用同一 `LOOM_TEST_TOKEN` 调用服务。
 
 ```powershell
@@ -73,3 +89,11 @@ python tests/run_acceptance.py --evidence-dir "$env:TEMP/loom-acceptance-$(New-G
 ```
 
 `DEEPSEEK_API_KEY` 由测试终端的环境提供。测试产物包括每个断言组的结论、可执行文件摘要和脱敏的 HTTP 取证记录。输入框客户端例子在 [examples/composer.mjs](examples/composer.mjs)，上层只在用户点击发送后走正常投递。详细结果见[第一期验收记录](docs/acceptance/results-v1.md)。
+
+本期跨仓联验使用独立 HOME、本机模型夹具、真实 OIS、OIC 和四个已构建的 App。Windows 上从可截图的用户会话运行。将下列环境变量指向对应二进制、App 清单和本地 Playwright 安装目录。测试会在临时目录管理 Service、读取 Skill、截图并验证图片已经送达模型，最后撤下 Service。带 `--browser` 时还会用 Chromium 在页面绑定工具和核对 ToolCall。
+
+```powershell
+python tests/oi_workspace_e2e.py --ois $env:OIS_BIN --oic $env:OIC_BIN --management $env:OI_MANAGEMENT_MANIFEST --skills $env:OI_SKILLS_MANIFEST --capture $env:OI_COMPUTER_USE_MANIFEST --filesystem $env:OI_FILESYSTEM_MANIFEST --browser
+```
+
+浏览器测试读取 `LOOM_PLAYWRIGHT_MODULE`、`LOOM_BROWSER_EXECUTABLE`，服务测试沿用 `LOOM_TEST_BIN` 与 `LOOM_TEST_REDIS_URL`。可另加 `--live-text` 并设置 `DEEPSEEK_API_KEY`，让 DeepSeek 在单独会话里查找并读取合成 Skill。截图和视觉请求在本机模型夹具内验证。单独运行 `python tests/workbench_e2e.py` 可验收工作台管理、聊天修改自身、审批与 Note，以及窄屏交互。[跨仓验收脚本](tests/oi_workspace_e2e.py) · [工作台浏览器用例](tests/workbench_browser.cjs)

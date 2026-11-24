@@ -2,8 +2,10 @@
 mod bundled;
 pub(crate) mod lua;
 mod mcp;
+mod oi;
 mod resources;
 mod store;
+mod workbench;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -278,7 +280,7 @@ impl Catalog {
                 schema(s, config)?;
             }
         }
-        Ok(())
+        self.selected_tools(a).map(|_| ())
     }
     fn package_for(&self, i: &Value) -> R<Value> {
         self.get(
@@ -308,18 +310,19 @@ impl Catalog {
         }
         for src in self.all("tool")? {
             let name = string(&src, "id")?;
-            if !self.source_enabled(&src)? {
-                continue;
-            }
             let own_plugin = src["source"] == "plugin"
                 && src["instance"]
                     .as_str()
                     .is_some_and(|i| includes(&grants["plugins"], i))
                 && includes(&grants["operations"], "plugins.set_enabled");
             let permitted = own_plugin
+                || (src["source"] == "oi"
+                    && src["toolset"]
+                        .as_str()
+                        .is_some_and(|s| includes(&grants["toolsets"], s)))
                 || includes(&grants["tools"], name)
                 || includes(&src["allowed_agents"], a["id"].as_str().unwrap_or(""));
-            if !permitted {
+            if !permitted || !self.source_enabled(&src)? {
                 continue;
             }
             let mut d = src.clone();
@@ -363,7 +366,10 @@ impl Catalog {
     }
     pub fn tools(&self, owner: &str, admin: bool, agent_id: &str) -> R<Value> {
         let a = self.get_agent(owner, admin, agent_id)?;
-        let (mut tools, sets) = self.available(&a)?;
+        self.selected_tools(&a)
+    }
+    fn selected_tools(&self, a: &Value) -> R<Value> {
+        let (mut tools, sets) = self.available(a)?;
         let mut chosen = BTreeSet::new();
         for b in array(&a["tools"]) {
             if let Some(t) = b["tool"].as_str().or(b.as_str()) {
@@ -375,12 +381,12 @@ impl Catalog {
                 chosen.extend(m.iter().cloned());
             }
         }
-        Ok(json!(
-            chosen
-                .into_iter()
-                .filter_map(|n| tools.remove(&n))
-                .collect::<Vec<_>>()
-        ))
+        let selected: Vec<_> = chosen
+            .into_iter()
+            .filter_map(|n| tools.remove(&n))
+            .collect();
+        oi::check_names(&selected)?;
+        Ok(json!(selected))
     }
     pub fn authorize(
         &self,
@@ -452,7 +458,7 @@ impl Catalog {
                 &ctx,
                 &args,
             )?,
-            Some("mcp") => {
+            Some("mcp" | "oi") => {
                 self.remote_call(&raw, &args, tracking, || {
                     self.authorize(owner, false, agent_id, name, snapshot)
                         .map(|_| ())
@@ -462,7 +468,7 @@ impl Catalog {
             _ => return Err("invalid: tool source".into()),
         };
         if let Some(s) = raw.get("output_schema") {
-            let data = if raw["source"] == "mcp" {
+            let data = if matches!(raw["source"].as_str(), Some("mcp" | "oi")) {
                 result
                     .get("structuredContent")
                     .ok_or("invalid: missing structured result")?

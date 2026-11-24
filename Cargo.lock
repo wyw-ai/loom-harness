@@ -892,6 +892,7 @@ dependencies = [
  "futures-util",
  "jsonschema",
  "mlua",
+ "percent-encoding",
  "redis",
  "reqwest",
  "rusqlite",

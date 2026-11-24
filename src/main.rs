@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
         }
     }
     if cfg.role != "worker" {
+        tokio::spawn(app.catalog.clone().sync_oi_instances());
         let listener = tokio::net::TcpListener::bind(&cfg.bind).await?;
         println!("loom-harness listening on {}", listener.local_addr()?);
         axum::serve(listener, api::router(app))

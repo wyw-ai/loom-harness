@@ -2,14 +2,23 @@ use super::resources::scoped;
 use super::*;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
-struct Peer<'a> {
+pub(super) struct Peer<'a> {
     catalog: &'a Catalog,
     connection: &'a Value,
     session: Option<String>,
     version: String,
 }
+
+fn credential(reference: &str) -> R<String> {
+    let key = format!(
+        "LOOM_MCP_CREDENTIAL_{}",
+        id(reference)?.replace('-', "_").to_ascii_uppercase()
+    );
+    std::env::var(key).map_err(|_| "missing MCP credential".into())
+}
+
 impl Peer<'_> {
-    async fn message(&mut self, method: &str, params: Value, request: bool) -> R<Value> {
+    pub(super) async fn message(&mut self, method: &str, params: Value, request: bool) -> R<Value> {
         let mut body = json!({"jsonrpc":"2.0","method":method,"params":params});
         if request {
             body["id"] = json!(uuid::Uuid::new_v4().to_string());
@@ -34,13 +43,7 @@ impl Peer<'_> {
             post = post.header("Mcp-Session-Id", s)
         }
         if let Some(reference) = self.connection["credential_ref"].as_str() {
-            id(reference)?;
-            let key = format!(
-                "LOOM_MCP_CREDENTIAL_{}",
-                reference.replace('-', "_").to_ascii_uppercase()
-            );
-            let secret = std::env::var(key).map_err(|_| "missing MCP credential")?;
-            post = post.bearer_auth(secret);
+            post = post.bearer_auth(credential(reference)?);
         }
         let mut response = post
             .send()
@@ -86,6 +89,60 @@ impl Peer<'_> {
         decode_reply(&body["id"], reply)
     }
 }
+impl Drop for Peer<'_> {
+    fn drop(&mut self) {
+        // OIS retains stateful MCP sessions until DELETE. A generic MCP server
+        // may be stateless, in which case it never supplied a session id.
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        let Some(url) = self.connection["url"].as_str() else {
+            return;
+        };
+        let mut request = self
+            .catalog
+            .http
+            .delete(url)
+            .header("Mcp-Session-Id", session)
+            .header("MCP-Protocol-Version", &self.version)
+            .header("Accept", "application/json, text/event-stream");
+        if let Some(reference) = self.connection["credential_ref"].as_str() {
+            let Ok(secret) = credential(reference) else {
+                return;
+            };
+            request = request.bearer_auth(secret);
+        }
+        tokio::spawn(async move {
+            let _ = request.send().await;
+        });
+    }
+}
+impl Peer<'_> {
+    pub(super) async fn definitions(&mut self, pages: &mut usize) -> R<Vec<Value>> {
+        let mut tools = vec![];
+        let mut seen = BTreeSet::new();
+        let mut cursors = BTreeSet::new();
+        let mut args = json!({});
+        loop {
+            let page = self.message("tools/list", args, true).await?;
+            *pages += 1;
+            for tool in page["tools"].as_array().ok_or("invalid: MCP list")? {
+                if !seen.insert(string(tool, "name")?.to_owned()) {
+                    return Err("invalid: duplicate MCP tool name".into());
+                }
+                tools.push(tool.clone());
+            }
+            if page["nextCursor"].is_null() {
+                return Ok(tools);
+            }
+            let next = string(&page, "nextCursor")?;
+            if next.is_empty() || !cursors.insert(next.to_owned()) || *pages >= 1024 {
+                return Err("invalid: MCP pagination".into());
+            }
+            args = json!({"cursor": next});
+        }
+    }
+}
 fn sse_response(bytes: &[u8], id: &Value) -> Option<Value> {
     let text = std::str::from_utf8(bytes).ok()?.replace("\r\n", "\n");
     for part in text.split("\n\n") {
@@ -113,7 +170,7 @@ fn decode_reply(id: &Value, v: Value) -> R<Value> {
         .ok_or("invalid: missing MCP result".into())
 }
 impl Catalog {
-    async fn peer<'a>(&'a self, c: &'a Value) -> R<Peer<'a>> {
+    pub(super) async fn peer<'a>(&'a self, c: &'a Value) -> R<Peer<'a>> {
         let version = c["protocol_version"]
             .as_str()
             .unwrap_or("2025-11-25")
@@ -144,8 +201,13 @@ impl Catalog {
         tracking: &Value,
         authorize: impl FnOnce() -> R<()>,
     ) -> R<Value> {
-        let c = self.get("connection", string(tool, "connection_key")?)?;
-        if c["revision"] != tool["connection_revision"] {
+        let oi = tool["source"] == "oi";
+        let c = if oi {
+            self.oi_connection(tool)?
+        } else {
+            self.get("connection", string(tool, "connection_key")?)?
+        };
+        if !oi && c["revision"] != tool["connection_revision"] {
             return Err("conflict: MCP connection changed".into());
         }
         let mut peer = self.peer(&c).await?;
@@ -158,6 +220,9 @@ impl Catalog {
         let mut req = json!({"name":tool["local_id"],"arguments":args});
         if tool["effectful"] == true {
             req["_meta"] = json!({"loom.tool_call_id":string(tracking,"tool_call_id")?,"loom.idempotency_key":string(tracking,"idempotency_key")?});
+        }
+        if oi {
+            req["_meta"]["loom.expected_source"] = tool["binding"]["source"].clone();
         }
         let result = peer.message("tools/call", req, true).await.map_err(|e| {
             if e.starts_with("MCP transport:")
@@ -172,7 +237,7 @@ impl Catalog {
         if !result["content"].is_array() {
             return Err("invalid: MCP content".into());
         }
-        if result["isError"] == true {
+        if result["isError"] == true && !oi {
             return Err(format!("MCP tool error: {}", result["content"]));
         }
         Ok(result)
@@ -265,12 +330,8 @@ impl Catalog {
         let generation=self.db()?.query_row("INSERT INTO catalog_refresh VALUES(?1,1) ON CONFLICT(id) DO UPDATE SET generation=generation+1 RETURNING generation",[&key],|r|r.get::<_,i64>(0)).map_err(err)?;
         let mut pages = 0;
         let result=async{
-            let mut peer=self.peer(&c).await?;let mut cursor=None;let mut cursors=BTreeSet::new();let mut seen=BTreeSet::new();let mut defs=vec![];
-            loop{
-                let args=cursor.take().map(|s:String|json!({"cursor":s})).unwrap_or(json!({}));let page=peer.message("tools/list",args,true).await?;pages+=1;
-                let list=page["tools"].as_array().ok_or("invalid: MCP list")?;
-                for t in list{let n=string(t,"name")?;
-                    if !seen.insert(n.to_owned()){return Err("invalid: duplicate MCP tool name".into())}
+            let mut peer=self.peer(&c).await?;let mut defs=vec![];
+                for t in peer.definitions(&mut pages).await? {let n=string(&t,"name")?;
                     let import=array(&c["imports"]).find(|v|*v==n||v["name"]==n);
                     if c["imports"].is_array()&&import.is_none(){continue}
                     let direct=import.is_some_and(|v|v["exposure"]=="direct");let fq=format!("{key}.{}",n.replace('%',"%25").replace('.',"%2E"));
@@ -288,8 +349,7 @@ impl Catalog {
                     if let Some(s)=t.get("outputSchema"){d["output_schema"]=s.clone()}
                     defs.push(d);
                 }
-                let Some(next)=page["nextCursor"].as_str()else{break};if !cursors.insert(next.to_owned())||pages>1024{return Err("invalid: MCP pagination".into())}cursor=Some(next.into());
-            }Ok::<_,String>(defs)
+            Ok::<_,String>(defs)
         }.await;
         let mut db = self.db()?;
         let tx = db

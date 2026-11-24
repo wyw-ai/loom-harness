@@ -10,6 +10,12 @@ pub fn wire_name(id: &str) -> String {
     // Preserve ordinary function names. Escape dots and underscores separately to avoid collisions.
     id.replace('_', "_u").replace('.', "_d").replace('-', "_h")
 }
+pub(crate) fn model_name(tool: &Value, id: &str) -> String {
+    if tool["source"] == "oi" {
+        return tool["model_name"].as_str().unwrap_or(id).to_string();
+    }
+    wire_name(id)
+}
 fn result_of(call: &Value) -> Value {
     if call["status"] == "failed" {
         json!({"error":call["error"].as_str().unwrap_or("tool failed")})
@@ -87,7 +93,7 @@ pub async fn top(
     } else {
         dir.iter()
             .find(|d| {
-                d["direct"] == true && d["id"].as_str().is_some_and(|id| wire_name(id) == name)
+                d["direct"] == true && d["id"].as_str().is_some_and(|id| model_name(d, id) == name)
             })
             .and_then(|d| d["id"].as_str())
             .unwrap_or("")
@@ -224,12 +230,27 @@ fn settle(app: &App, w: &Work, call: &Value, result: Result<Value>) -> Result<Va
         }
         Ok(mut v) => {
             let tool = call["tool_id"].as_str().unwrap_or("");
+            let mut receipt = json!({"status":"completed"});
+            if let Some(def) = call["directory"].as_array().and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|t| t["id"] == tool && t["source"] == "oi")
+            }) {
+                receipt["oi_call_id"] = v["_meta"]["call_id"].clone();
+                receipt["binding"] = def["binding"].clone();
+                receipt["binding_revision"] = def["revision"].clone();
+                if v["isError"] == true {
+                    receipt["status"] = json!("failed");
+                    receipt["error"] = json!(format!("OI tool error: {}", v["content"]));
+                }
+            }
             if !matches!(tool, "read_note" | "code_exec" | "search_notes") {
                 v = store_parts(app, call, v)?;
             }
-            app.db
-                .update_call(w, "tool_call", id, json!({"status":"completed","result":v}))?;
-            Ok(v)
+            // Commit the remote correlation, result, and terminal state together.
+            receipt["result"] = v;
+            let saved = app.db.update_call(w, "tool_call", id, receipt)?;
+            Ok(result_of(&saved))
         }
         Err(e) => {
             let msg = e.to_string();
@@ -283,7 +304,12 @@ async fn invoke(app: &App, w: &Work, dir: &[Value], call: &Value) -> Result<Valu
                 }
                 let cid=s(call,"id")?;
                 let tracked=tool["effectful"]==true || tool["source"]=="mcp" || matches!(id,"plugins.install"|"plugins.set_enabled"|"settings.update"|"agents.update");
-                let tracking=json!({"tool_call_id":cid,"idempotency_key":cid,"dispatched_at_ms":chrono::Utc::now().timestamp_millis(),"service":tool["connection_key"],"arguments":args,"recovery":tool["recovery"]});
+                let mut tracking=json!({"tool_call_id":cid,"idempotency_key":cid,"dispatched_at_ms":chrono::Utc::now().timestamp_millis(),"service":tool["connection_key"],"arguments":args,"recovery":tool["recovery"]});
+                if tool["source"] == "oi" {
+                    tracking["binding"] = tool["binding"].clone();
+                    tracking["binding_revision"] = tool["revision"].clone();
+                    tracking["service"] = tool["binding"]["service"].clone();
+                }
                 if tracked{app.db.begin_external(w,cid,tracking.clone())?;}
                 let scope=ToolScope{owner,agent,directory:&snapshot};
                 let output=app.catalog.execute_tracked(scope,id,args.clone(),&ctx,&tracking).await;
@@ -301,6 +327,9 @@ async fn invoke(app: &App, w: &Work, dir: &[Value], call: &Value) -> Result<Valu
                     }
                     Err(e)=>return Err(anyhow!(e))
                 };
+                if tool["source"] == "oi" {
+                    return Ok(out);
+                }
                 let receipt=out.get("structuredContent").unwrap_or(&out);
                 if matches!(receipt["status"].as_str(),Some("accepted"|"pending"|"waiting")) || (tracked && !receipt["job_id"].is_null() && receipt["status"]!="completed"){
                     app.db.update_call(w,"tool_call",cid,json!({"status":"accepted","job_id":receipt["job_id"]}))?;

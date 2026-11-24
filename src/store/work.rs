@@ -515,7 +515,7 @@ pub(super) fn tool_history(
         },
         evidence,
     )?;
-    let mut item = json!({"role":"tool","tool_call_id":call["id"],"run_id":run["id"],"status":call["status"],
+    let mut item = json!({"role":"tool","tool_call_id":call["id"],"tool_id":call["tool_id"],"run_id":run["id"],"status":call["status"],
         "event_id":event["id"],"content":content});
     if let Some(note) = note {
         item["note_ref"] = note.clone()

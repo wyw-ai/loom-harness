@@ -1,4 +1,4 @@
-# loom-harness 首版规范
+# loom-harness 规范
 
 loom-harness 是一个云端 Agent 与上下文管理服务。外部应用可定义 Agent、向 Agent 或 Session 投递交办，并在异步工具返回后取回同一项工作的结果。Rust 宿主维护执行状态，Lua 插件扩展推理、工具和上下文行为。
 
@@ -6,6 +6,8 @@ loom-harness 是一个云端 Agent 与上下文管理服务。外部应用可定
 
 | 读者要解决的问题 | 从哪里开始 |
 | --- | --- |
+| 完整 WebUI 覆盖哪些管理操作？如何核对界面、聊天和真实运行操作的是同一份资源？ | [WebUI 封板目标与验收](goals/webui.md) · [目标归档](../goal-shaping/archive/webui/2026-11-24-product-scope/design.md)。[工作台入口与运行说明](../../README.md#浏览器工作台)。 |
+| 如何通过内部工具插件自动发现 OI Service，再通过 API 或 Agent spec 绑定相应 Toolset？ | [封板目标与验收](goals/oi-workspace-tools.md) · [配置、工具命名与同步](reference/oi-workspace-tools.md) · [目标归档](../goal-shaping/archive/oi-workspace-tools/2026-11-24-service-toolsets/design.md)。[浏览器与双仓联验](../../tests/oi_workspace_e2e.py)。 |
 | 如何编写 Agent spec、添加独立 Tool，或配置同一插件实例的多个连接？ | [HOME 资源规范](reference/home.md)和[配置生效与恢复的验收](goals/v1.md#home-acceptance) |
 | 怎样从官方或第三方 AgentTemplate 创建普通 Agent 或创造者？怎样验证两个角色的权限与新插件的实际效果？ | [模板、包清单与插件配置](reference/home.md#agent-templates)和[角色、授权与真实调用验收](goals/v1.md#agent-template-acceptance) |
 | 怎样将一个自定义 Lua 工具和一个 MCP 工具组成同一 Toolset，如何核对实际派发？ | [混合工具集配置](reference/tool-sources.md#mixed-toolset)和[专项验收](goals/v1.md#mixed-toolset-acceptance) |

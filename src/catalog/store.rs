@@ -137,7 +137,9 @@ impl Catalog {
         expect: Option<&str>,
         file: Option<&Path>,
     ) -> R<Value> {
-        self.save_with(kind, key, expect, file, || Ok(value))
+        self.save_with(kind, key, expect, file.map(|path| (path, None)), || {
+            Ok(value)
+        })
     }
 
     pub(super) fn reload_agent(&self, key: &str, file: &Path) -> R<Value> {
@@ -156,19 +158,18 @@ impl Catalog {
         })
     }
 
-    fn save_with(
+    pub(super) fn save_with(
         &self,
         kind: &str,
         key: &str,
         expect: Option<&str>,
-        file: Option<&Path>,
+        file: Option<(&Path, Option<&Value>)>,
         document: impl FnOnce() -> R<Value>,
     ) -> R<Value> {
         let mut db = self.db()?;
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(err)?;
-        let mut value = document()?;
         if file.is_some() {
             let alias:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM catalog_current WHERE kind=?1 AND lower(id)=lower(?2) AND id<>?2)",params![kind,key],|r|r.get(0)).map_err(err)?;
             if alias {
@@ -188,6 +189,7 @@ impl Catalog {
         {
             return Err("conflict: stale resource revision".into());
         }
+        let mut value = document()?;
         let m = value
             .as_object_mut()
             .ok_or("invalid: expected resource object")?;
@@ -209,8 +211,13 @@ impl Catalog {
             params![kind, key],
         )
         .map_err(err)?;
-        if let Some(p) = file {
-            write(p, serde_yaml::to_string(&value).map_err(err)?.as_bytes())?;
+        if let Some((p, yaml)) = file {
+            write(
+                p,
+                serde_yaml::to_string(yaml.unwrap_or(&value))
+                    .map_err(err)?
+                    .as_bytes(),
+            )?;
         }
         tx.commit().map_err(err)?;
         Ok(value)
