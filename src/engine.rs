@@ -499,17 +499,32 @@ async fn step(app: &App, w: &Work) -> Result<()> {
             continue;
         }
         let cid = s(&call, "id")?;
-        let response = context::complete(
+        let mut stream = app.db.start_text_stream(w, cid)?;
+        let mut stream_error = None;
+        let response = context::complete_streaming(
             &app.http,
             &provider.route(),
             &objects(&call["messages"]),
             &objects(&call["tools"]),
             None,
+            |text| {
+                if stream_error.is_none() {
+                    stream_error = stream.push(text).err();
+                }
+            },
         )
         .await;
+        if let Some(error) = stream_error {
+            stream.finish(false)?;
+            return Err(error.into());
+        }
+        let valid_response = response
+            .as_ref()
+            .is_ok_and(|reply| matches!(reply.finish_reason.as_str(), "stop" | "tool_calls"));
+        stream.finish(valid_response)?;
         match response {
             Ok(reply) if matches!(reply.finish_reason.as_str(), "stop" | "tool_calls") => {
-                app.db.update_call(w,"model_call",cid,json!({"status":"completed","message":reply.message,"finish_reason":reply.finish_reason,"usage":reply.usage}))?;
+                app.db.update_call(w,"model_call",cid,json!({"status":"completed","message":reply.message,"finish_reason":reply.finish_reason,"usage":reply.usage,"timing":reply.timing}))?;
                 directory = objects(&call["tool_directory"]);
                 accepted = Some(reply.message);
                 break;

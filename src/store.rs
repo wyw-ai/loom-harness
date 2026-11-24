@@ -11,6 +11,7 @@ mod delivery;
 mod dispatch;
 mod extensions;
 mod replies;
+mod stream;
 #[cfg(test)]
 mod tests;
 mod work;
@@ -231,6 +232,10 @@ impl Store {
             CREATE TABLE IF NOT EXISTS workq(seq INTEGER PRIMARY KEY,run_id TEXT NOT NULL UNIQUE,owner TEXT NOT NULL,
               ready INTEGER NOT NULL DEFAULT 1,token TEXT,worker TEXT,expires INTEGER);
             CREATE INDEX IF NOT EXISTS work_ready ON workq(ready,expires,seq);
+            CREATE TABLE IF NOT EXISTS run_stream(seq INTEGER PRIMARY KEY,run_id TEXT NOT NULL,
+              model_call_id TEXT NOT NULL,attempt_id TEXT NOT NULL,event TEXT NOT NULL,text TEXT);
+            CREATE INDEX IF NOT EXISTS run_stream_cursor ON run_stream(run_id,seq);
+            CREATE INDEX IF NOT EXISTS run_stream_call ON run_stream(model_call_id,seq);
             CREATE TABLE IF NOT EXISTS outbox(seq INTEGER PRIMARY KEY,event_id TEXT NOT NULL UNIQUE,
               published INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS consumed(consumer TEXT NOT NULL,event_id TEXT NOT NULL,

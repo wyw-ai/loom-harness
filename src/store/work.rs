@@ -179,6 +179,9 @@ impl Store {
             )?;
             let mut run = load(c, &owner, "run", &rid)?;
             run["status"] = json!("running");
+            if run.get("worker_claimed_us").is_none() {
+                run["worker_claimed_us"] = json!(chrono::Utc::now().timestamp_micros());
+            }
             c.execute("INSERT INTO run_steps(run_id,step,started_ms,worker) VALUES(?,?,?,?)
                ON CONFLICT(run_id,step) DO UPDATE SET started_ms=coalesce(run_steps.started_ms,excluded.started_ms),
                worker=coalesce(run_steps.worker,excluded.worker)",

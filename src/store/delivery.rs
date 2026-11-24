@@ -126,6 +126,7 @@ pub(super) fn deliver_in(
                 json!({
                     "session_id":s,"agent_id":agent,"agent_snapshot":body["agent_snapshot"],"agent_revision":body["agent_snapshot"]["revision"],
                     "delivery_id":did,"status":"queued","version":1,"step":0,"input":event,"inputs":[event],
+                    "admitted_us":chrono::Utc::now().timestamp_micros(),
                     "goal":body["goal"],"delivery_contract":body["delivery_contract"],"result_schema":body["result_schema"]
                 }),
             )?;

@@ -66,6 +66,79 @@ fn retries_and_tenant_reads_do_not_duplicate_runs_or_history() {
 }
 
 #[test]
+fn stream_replay_across_connections_fences_attempts_and_ends_on_cancellation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("loom.db");
+    let worker = Store::open(&path).unwrap();
+    let api = Store::open(&path).unwrap();
+    let (_, run, old) = setup(&worker);
+    let call = worker.record_call(&old, "model_call", json!({})).unwrap();
+    let call_id = call["id"].as_str().unwrap();
+    let mut old_writer = worker.start_text_stream(&old, call_id).unwrap();
+    old_writer.push("first").unwrap();
+    let page = api.stream_page("u", &run, 0).unwrap();
+    assert_eq!(page.status, "active");
+    assert_eq!(page.rows.len(), 2);
+    assert_eq!(page.rows[1].event, "text_delta");
+    assert_eq!(page.rows[1].text.as_deref(), Some("first"));
+    let cursor = page.rows[1].seq;
+    let original_attempt = page.rows[0].attempt_id.clone();
+    assert!(matches!(
+        api.stream_page("other-owner", &run, 0),
+        Err(StoreError::NotFound)
+    ));
+
+    worker
+        .tx(|c| {
+            c.execute(
+                "UPDATE workq SET expires=unixepoch()-1 WHERE run_id=?",
+                [&run],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let replacement = worker.claim("replacement", 120).unwrap().unwrap();
+    let mut writer = worker.start_text_stream(&replacement, call_id).unwrap();
+    assert!(matches!(
+        old_writer.finish(true),
+        Err(StoreError::StaleLease)
+    ));
+    writer.push("replacement").unwrap();
+    writer.finish(false).unwrap();
+
+    let page = api.stream_page("u", &run, cursor).unwrap();
+    assert_eq!(
+        page.rows
+            .iter()
+            .map(|r| r.event.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt_started", "text_delta", "attempt_discarded"]
+    );
+    assert_ne!(page.rows[0].attempt_id, original_attempt);
+    assert!(
+        page.rows
+            .iter()
+            .all(|row| row.attempt_id == page.rows[0].attempt_id)
+    );
+    let mut cancelled = worker.start_text_stream(&replacement, call_id).unwrap();
+    worker.finish(&replacement, "cancelled", json!({})).unwrap();
+    assert!(matches!(
+        cancelled.push("late"),
+        Err(StoreError::StaleLease)
+    ));
+    let terminal = api.stream_page("u", &run, page.rows[2].seq).unwrap();
+    assert_eq!(terminal.status, "cancelled");
+    assert_eq!(terminal.rows.len(), 1);
+    assert_eq!(terminal.rows[0].event, "attempt_started");
+    assert!(
+        api.stream_page("u", &run, terminal.rows[0].seq)
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+}
+
+#[test]
 fn recovery_reclaims_once_and_fences_old_worker() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("loom.db");

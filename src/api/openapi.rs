@@ -19,6 +19,7 @@ const PUBLIC: &[(&str, &str)] = &[
     ("event-deliveries/{id}", "get"),
     ("runs", "get"),
     ("runs/{id}", "get"),
+    ("runs/{id}/stream", "get"),
     ("runs/{id}/steps", "get"),
     ("runs/{id}/tools", "get"),
     ("runs/{id}/model-calls", "get"),
@@ -87,6 +88,22 @@ pub(super) fn document(mut paths: Value, who: &crate::config::Identity) -> Value
                 "200"
             };
             let mut op = json!({"responses":{status:{"description":"Success","content":{"application/json":{"schema":{}}}}}});
+            if path == "runs/{id}/stream" {
+                op = json!({
+                    "summary":"Stream provisional assistant text for one Run",
+                    "description":"Read ordered Server-Sent Events. A new attempt_started replaces earlier text for the same model_call_id. Append text_delta.text for that attempt. attempt_discarded invalidates its text. attempt_finished ends the provider stream. Use the committed ModelCall or Run for authoritative output, including on run_end after cancellation or failure. A tool-only call can finish without text.",
+                    "parameters":[
+                        {"name":"Last-Event-ID","in":"header","schema":{"type":"string"},"description":"Resume after this event ID. Takes precedence over after."},
+                        {"name":"after","in":"query","schema":{"type":"string"},"description":"Exclusive cursor. Omit to replay from the beginning."}
+                    ],
+                    "responses":{
+                        "200":{"description":"attempt_started, text_delta, attempt_finished, attempt_discarded, then run_end when the Run reaches a terminal state","content":{"text/event-stream":{"schema":{"type":"string"}}}},
+                        "204":{"description":"The supplied cursor already includes run_end"},
+                        "400":{"description":"Invalid cursor"},"401":{"description":"Missing credential"},
+                        "404":{"description":"Run not accessible"}
+                    }
+                });
+            }
             if matches!(method, "post" | "patch") {
                 op["requestBody"] =
                     json!({"content":{"application/json":{"schema":{"type":"object"}}}});

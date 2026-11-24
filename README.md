@@ -24,6 +24,14 @@ $delivery = Invoke-RestMethod "$api/events/$($event.id)/deliveries" -Method Post
 Invoke-RestMethod "$api/runs/$($delivery.run_id)" -Headers $headers
 ```
 
+模型请求默认启用流式输出。取得 `run_id` 后即可订阅正文，首段到达时 Run 可以仍在执行。
+
+```powershell
+curl.exe -N -H "Authorization: Bearer $env:LOOM_TEST_TOKEN" "$api/runs/$($delivery.run_id)/stream"
+```
+
+客户端按 `model_call_id` 和 `attempt_id` 拼接 `text_delta.text`。同一模型调用出现新的 `attempt_started` 时替换旧尝试，收到 `attempt_discarded` 时清除该次草稿。断线后用 `Last-Event-ID` 请求头携带最后收到的 SSE ID 续读。收到 `run_end` 后可查询 Run 的最终结果。首段推理与首段正文的到达时间分别记在模型调用的 `timing.first_reasoning_us` 和 `timing.first_content_us`，与 `timing.request_started_us` 一样使用 UTC Unix 微秒。
+
 Run 会从受理推进到完成或失败，重复查询同一 ID 可取得最终状态。配置 `LOOM_MODEL_ROUTES` 可以使用其他与 Chat Completions 兼容的提供方。例如 `{"local":{"base_url":"http://127.0.0.1:9000","model":"test","images":true}}`。每条路由可用 `api_key_env` 指向该提供方的凭据环境变量，多个模型可用 `LOOM_DEFAULT_MODEL` 选定默认项。设置 `--home` 或 `LOOM_HOME` 选择持久目录，`--role api`、`--role worker` 可在同一主机、同一 HOME 中分别启动入口与执行进程。默认 `all` 同时启动二者。
 
 ## 工具回执和推荐权限

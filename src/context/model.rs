@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::HashSet, fmt, time::Duration};
 
+mod stream;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelRoute {
     pub base_url: String,
@@ -27,6 +29,14 @@ pub struct ModelReply {
     pub tool_calls: Vec<ModelToolCall>,
     pub finish_reason: String,
     pub usage: Value,
+    pub timing: ModelTiming,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ModelTiming {
+    pub request_started_us: i64,
+    pub first_content_us: Option<i64>,
+    pub first_reasoning_us: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -124,8 +134,19 @@ pub async fn complete(
     tools: &[Value],
     response_format: Option<&Value>,
 ) -> Result<ModelReply, ModelError> {
+    complete_streaming(http, route, messages, tools, response_format, |_| {}).await
+}
+
+pub async fn complete_streaming(
+    http: &Client,
+    route: &ModelRoute,
+    messages: &[Value],
+    tools: &[Value],
+    response_format: Option<&Value>,
+    mut on_text: impl FnMut(&str),
+) -> Result<ModelReply, ModelError> {
     let url = endpoint(route, route.api_key_env.is_some())?;
-    let mut payload = json!({"model": route.model, "messages": messages.iter().map(wire_message).collect::<Vec<_>>(), "stream": false});
+    let mut payload = json!({"model": route.model, "messages": messages.iter().map(wire_message).collect::<Vec<_>>(), "stream": true, "stream_options":{"include_usage":true}});
     if !tools.is_empty() {
         payload["tools"] = json!(tools);
     }
@@ -135,6 +156,10 @@ pub async fn complete(
     let mut request = http
         .post(url)
         .timeout(Duration::from_secs(120))
+        .header(
+            reqwest::header::ACCEPT,
+            "text/event-stream, application/json",
+        )
         .json(&payload);
     if let Some(name) = &route.api_key_env {
         let key = std::env::var(name)
@@ -143,6 +168,11 @@ pub async fn complete(
             .ok_or_else(|| ModelError::invalid("model credential is not configured"))?;
         request = request.bearer_auth(key);
     }
+    let mut timing = ModelTiming {
+        request_started_us: chrono::Utc::now().timestamp_micros(),
+        first_content_us: None,
+        first_reasoning_us: None,
+    };
     let response = request.send().await.map_err(|e| ModelError {
         message: if e.is_timeout() {
             "model provider timed out"
@@ -160,11 +190,34 @@ pub async fn complete(
             retryable: status.is_server_error() || matches!(status.as_u16(), 408 | 429),
         });
     }
+    let is_stream = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"));
+    if is_stream {
+        return stream::receive(response, timing, on_text).await;
+    }
     let body: Value = response
         .json()
         .await
         .map_err(|_| ModelError::invalid("invalid model response JSON"))?;
-    parse_reply(&body)
+    let now = chrono::Utc::now().timestamp_micros();
+    let message = &body["choices"][0]["message"];
+    timing.first_content_us = message["content"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|_| now);
+    timing.first_reasoning_us = message["reasoning_content"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|_| now);
+    let reply = parse_reply(&body, timing)?;
+    if let Some(text) = reply.content.as_deref().filter(|text| !text.is_empty()) {
+        on_text(text);
+    }
+    Ok(reply)
 }
 
 fn required_text<'a>(v: &'a Value, key: &str) -> Result<&'a str, ModelError> {
@@ -174,7 +227,7 @@ fn required_text<'a>(v: &'a Value, key: &str) -> Result<&'a str, ModelError> {
         .ok_or_else(|| ModelError::invalid(format!("model response is missing {key}")))
 }
 
-fn parse_reply(body: &Value) -> Result<ModelReply, ModelError> {
+fn parse_reply(body: &Value, timing: ModelTiming) -> Result<ModelReply, ModelError> {
     let choice = body
         .pointer("/choices/0")
         .ok_or_else(|| ModelError::invalid("model returned no choice"))?;
@@ -226,6 +279,7 @@ fn parse_reply(body: &Value) -> Result<ModelReply, ModelError> {
         tool_calls: calls,
         finish_reason: reason.to_owned(),
         usage: body["usage"].clone(),
+        timing,
     })
 }
 
@@ -265,11 +319,16 @@ mod tests {
     fn preserves_tool_pair_and_provider_continuation() {
         let message = json!({"role":"assistant","content":null,"reasoning_content":"provider replay data","tool_calls":[{"type":"function","id":"abc","function":{"name":"get","arguments":"{\"x\":2}"}}]});
         let mut payload = json!({"choices":[{"message":message,"finish_reason":"tool_calls"}]});
-        let r = parse_reply(&payload).unwrap();
+        let timing = ModelTiming {
+            request_started_us: 1,
+            first_content_us: None,
+            first_reasoning_us: None,
+        };
+        let r = parse_reply(&payload, timing).unwrap();
         assert_eq!(r.tool_calls[0].arguments["x"], 2);
         assert_eq!(r.message["reasoning_content"], "provider replay data");
         payload["choices"][0]["finish_reason"] = json!("stop");
-        assert!(parse_reply(&payload).is_err());
+        assert!(parse_reply(&payload, timing).is_err());
         let m = wire_message(
             &json!({"role":"user","content":"continue","source":"goal","secret":"no"}),
         );
@@ -342,6 +401,8 @@ mod tests {
             .is_none()
         );
         let calls = log.lock().unwrap();
+        assert_eq!(calls[0]["stream"], true);
+        assert_eq!(calls[0]["stream_options"]["include_usage"], true);
         let parts = &calls[0]["messages"][0]["content"];
         assert_eq!(parts[0]["text"], "before");
         assert_eq!(parts[2]["text"], "after");

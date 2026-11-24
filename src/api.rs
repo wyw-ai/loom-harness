@@ -9,6 +9,7 @@ use axum::{
 use serde_json::{Value, json};
 use std::collections::HashMap;
 mod openapi;
+mod stream;
 
 type ApiResult = Result<Value, ApiError>;
 struct ApiError(StatusCode, String);
@@ -89,6 +90,11 @@ async fn handle(
     let q: HashMap<String, String> = serde_urlencoded::from_str(uri.query().unwrap_or(""))
         .map_err(|_| bad("invalid query parameters"))?;
     let key = headers.get("idempotency-key").and_then(|h| h.to_str().ok());
+    if method == Method::GET
+        && let ["runs", run, "stream"] = parts.as_slice()
+    {
+        return stream::open(&app, who, run, &headers, q.get("after"));
+    }
     let response = route(&app, who, method.as_str(), &parts, &q, key, body).await?;
     let status =
         if method == Method::POST && matches!(parts.as_slice(), ["events", _, "deliveries"]) {
