@@ -160,6 +160,7 @@ pub(super) fn deliver_in(
             } else {
                 run["version"] = json!(run["version"].as_i64().unwrap_or(0) + 1);
                 if action == "request_cancel" {
+                    super::work::clear_progress_request(&mut run);
                     run["status"] = json!("cancelled");
                     run["stop_reason"] = json!("cancelled by user");
                     clear_lease(c, rid, false)?;
@@ -205,8 +206,17 @@ pub(super) fn deliver_in(
                         .as_array_mut()
                         .ok_or_else(|| StoreError::Storage("invalid run inputs".into()))?
                         .push(event.clone());
+                    let progress = question.is_none()
+                        && body["respond_now"] == true
+                        && run["status"] == "waiting"
+                        && super::work::waiting_on_async_tool(c, &run)?;
+                    if progress {
+                        run["progress_requested"] = json!(true);
+                        run["progress_request_id"] = json!(event_id);
+                        run["wake_reason"] = json!("progress_request");
+                    }
                     if question.is_none()
-                        && (run["status"] != "waiting" || run["waiting_input"] == true)
+                        && (progress || run["status"] != "waiting" || run["waiting_input"] == true)
                     {
                         run["waiting_input"] = json!(false);
                         run["status"] = json!("queued");

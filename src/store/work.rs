@@ -33,6 +33,7 @@ const RUN_FIXED: &[&str] = &[
     "version",
     "created_at",
     "status",
+    "progress_message",
 ];
 const CALL_FIXED: &[&str] = &[
     "id",
@@ -80,11 +81,34 @@ pub(super) fn check_wait(c: &Connection, run: &Value) -> Result<bool> {
     }
     Ok(ready)
 }
+
+pub(super) fn waiting_on_async_tool(c: &Connection, run: &Value) -> Result<bool> {
+    Ok(c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM objects WHERE kind='tool_call' AND owner=? AND parent=?
+            AND id IN(SELECT value FROM json_each(?))
+            AND json_extract(doc,'$.status') IN('accepted','running','progress','unknown','dispatched','waiting','pending')
+            AND coalesce(json_extract(doc,'$.tool_id'),'') NOT IN('ask_user','code_exec'))",
+        params![field(run, "owner")?, field(run, "id")?, run["waiting_for"].to_string()],
+        |row| row.get(0),
+    )?)
+}
+
+pub(super) fn clear_progress_request(run: &mut Value) {
+    if run.get("progress_request_id").is_some() {
+        run.as_object_mut().unwrap().remove("progress_request_id");
+        run["progress_requested"] = json!(false);
+        if run["wake_reason"] == "progress_request" {
+            run["wake_reason"] = Value::Null;
+        }
+    }
+}
+
 pub(super) fn queue_awakened(c: &Connection, run: &mut Value) -> Result<()> {
     let rid = field(run, "id")?.to_owned();
     run["status"] = json!("queued");
     run["version"] = json!(run["version"].as_u64().unwrap_or(0) + 1);
     run["wake_reason"] = json!("tool_result");
+    clear_progress_request(run);
     c.execute(
         "INSERT OR IGNORE INTO run_steps(run_id,step,ready_receipt_ms) VALUES(?,?,?)",
         params![
@@ -123,7 +147,8 @@ pub(super) fn apply_runtime_event(c: &Connection, eid: &str) -> Result<()> {
         [eid], |r|Ok((r.get(0)?,r.get(1)?)))?;
     if let (owner, Some(rid)) = fields {
         let mut run = load(c, &owner, "run", &rid)?;
-        if run["status"] == "waiting" && check_wait(c, &run)? {
+        let before_progress_claim = run["status"] == "queued" && run["progress_requested"] == true;
+        if (run["status"] == "waiting" || before_progress_claim) && check_wait(c, &run)? {
             queue_awakened(c, &mut run)?
         }
     }
@@ -185,8 +210,37 @@ impl Store {
             let mut run = run_for_lease(c, work)?;
             let owner = field(&run, "owner")?.to_owned();
             let rid = field(&run, "id")?.to_owned();
+            if let Some(message) = patch.get("progress_message") {
+                if status != "waiting" || run["progress_requested"] != true {
+                    return Err(StoreError::Conflict(
+                        "no outstanding progress request".into(),
+                    ));
+                }
+                for key in ["waiting_for", "pending_batch"] {
+                    if patch.get(key).is_some_and(|value| value != &run[key]) {
+                        return Err(StoreError::Invalid(
+                            "progress must preserve pending tool calls".into(),
+                        ));
+                    }
+                }
+                let request = field(&run, "progress_request_id")?;
+                append_history(
+                    c,
+                    &owner,
+                    field(&run, "session_id")?,
+                    &format!("progress:{rid}:{request}"),
+                    &json!({"role":"assistant","status":"progress","run_id":rid,
+                        "request_event_id":request,"content":message}),
+                )?;
+            }
             merge(&mut run, &patch, RUN_FIXED)?;
             run["status"] = json!(status);
+            if patch.get("progress_message").is_some()
+                || patch["progress_requested"] == false
+                || terminal(&run["status"])
+            {
+                clear_progress_request(&mut run);
+            }
             commit_step(c, &run)?;
             run["step"] = json!(run["step"].as_u64().unwrap_or(0) + 1);
             run["version"] = json!(run["version"].as_u64().unwrap_or(0) + 1);

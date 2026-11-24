@@ -32,11 +32,15 @@ pub fn chat_history(v: &Value) -> Vec<Value> {
             };
             // A historic tool receipt can outlive the ModelCall that issued it.
             // Render it as source material unless the provider-native pair is present.
-            if role == "tool" {
-                Some(json!({"role":"user","content":format!("Stored tool result: {content}")}))
+            let mut message = if role == "tool" {
+                json!({"role":"user","content":format!("Stored tool result: {content}")})
             } else {
-                Some(json!({"role":role,"content":content}))
+                json!({"role":role,"content":content})
+            };
+            if let Some(event) = m.get("event_id") {
+                message["source_event_id"] = event.clone();
             }
+            Some(message)
         })
         .collect()
 }
@@ -103,7 +107,11 @@ pub async fn worker(app: App, id: String) {
                 tokio::select! {
                     result=step(&app,&work)=>if let Err(e)=result
                         && e.downcast_ref::<crate::store::StoreError>().is_none_or(|err|!matches!(err,crate::store::StoreError::StaleLease)){
-                            let _=app.db.finish(&work,"failed",json!({"error":e.to_string()}));
+                            if work.run["progress_requested"]==true{
+                                let _=app.db.finish(&work,"waiting",json!({"progress_requested":false,"progress_error":e.to_string()}));
+                            }else{
+                                let _=app.db.finish(&work,"failed",json!({"error":e.to_string()}));
+                            }
                         },
                     _=renewal=>{}
                 }
@@ -275,9 +283,10 @@ async fn step(app: &App, w: &Work) -> Result<()> {
         goal = None;
     }
     let mut transcript = objects(&run["transcript"]);
+    let progress = run["progress_requested"] == true;
     let mut received = Vec::new();
     // Finish an explicitly parked asynchronous tool batch before requesting another model turn.
-    if let Some(pending) = run["pending_batch"].as_array() {
+    if !progress && let Some(pending) = run["pending_batch"].as_array() {
         for pair in pending {
             let call = app.db.get(owner, "tool_call", s(pair, "id")?)?;
             let result = tools::resume(app, w, &call).await?;
@@ -309,7 +318,11 @@ async fn step(app: &App, w: &Work) -> Result<()> {
         .tools(owner, false, agent_id)
         .map_err(anyhow::Error::msg)?;
     let mut directory = objects(&directory);
-    let schema = schemas(&directory, goal.is_some() && run["goal_completed"] != true);
+    let schema = if progress {
+        vec![]
+    } else {
+        schemas(&directory, goal.is_some() && run["goal_completed"] != true)
+    };
     let all_history = app.db.history(owner, sid)?;
     let history_items = objects(&all_history);
     // Build a fixed start-of-run prefix. Later independent work is outside this Run's input.
@@ -339,6 +352,17 @@ async fn step(app: &App, w: &Work) -> Result<()> {
     if let Some(initial) = inputs.first() {
         conversation.push(input_message(initial));
     }
+    // A progress request can be answered while the original provider tool pair is still open.
+    // Only the temporary input is projected; the resumable transcript keeps its native pair.
+    if progress {
+        for item in &mut transcript {
+            if let Some(calls) = item.get("tool_calls") {
+                *item = json!({"role":"assistant","content":format!("Previously requested tool calls: {calls}")});
+            } else if item["role"] == "tool" {
+                *item = json!({"role":"user","content":format!("Recorded tool result: {}",item["content"])});
+            }
+        }
+    }
     let mut offset = 0;
     for input in inputs.iter().skip(1) {
         let position = input["id"]
@@ -352,26 +376,36 @@ async fn step(app: &App, w: &Work) -> Result<()> {
     }
     conversation.extend_from_slice(&transcript[offset..]);
     conversation = select_context(app, owner, agent_id, conversation, Some(rid))?;
-    if goal.is_some() {
-        for receipt in received {
-            if let Some(item) = conversation
-                .iter_mut()
-                .find(|m| m["role"] == "tool" && m["tool_call_id"] == receipt["tool_call_id"])
-            {
-                item["context_protected"] = json!(true);
-            } else {
-                conversation.push(json!({"role":"user","source":"tool_evidence","context_protected":true,"content":format!("Received tool result for {}: {}",receipt["tool_call_id"],receipt["content"])}));
-            }
+    for receipt in received {
+        if let Some(item) = conversation
+            .iter_mut()
+            .find(|m| m["role"] == "tool" && m["tool_call_id"] == receipt["tool_call_id"])
+        {
+            item["context_protected"] = json!(true);
+        } else {
+            conversation.push(json!({"role":"user","source":"tool_evidence","context_protected":true,"content":format!("Received tool result for {}: {}",receipt["tool_call_id"],receipt["content"])}));
         }
     }
     let system = agent["system_prompt"]
         .as_str()
         .unwrap_or("You are a helpful assistant.");
     let mut sections = sections_for(app, owner, agent_id, &directory)?;
-    if run["result_schema"].is_object() {
+    if progress {
+        let mut current = Vec::new();
+        for id in objects(&run["waiting_for"]) {
+            let call = app.db.get(
+                owner,
+                "tool_call",
+                id.as_str().context("invalid waiting call")?,
+            )?;
+            current.push(json!({"tool_call_id":id,"tool":call["tool_id"],"job_id":call["job_id"],"status":call["status"]}));
+        }
+        sections.push(format!("Give a read-only progress update. The original request is still open. Original request: {}. Current tool calls: {}",inputs.first().map(input_message).unwrap_or_default()["content"],json!(current)));
+    } else if run["result_schema"].is_object() {
         sections.push(format!("Return the final answer as a JSON value matching this schema. Intermediate tool results retain their own types.\n{}",run["result_schema"]));
     }
-    let continuation = run["next_reason"] == "goal" && run["wake_reason"] != "tool_result";
+    let continuation =
+        !progress && run["next_reason"] == "goal" && run["wake_reason"] != "tool_result";
     let prompt = policy
         .as_ref()
         .and_then(|p| p["instruction"].as_str())
@@ -391,7 +425,9 @@ async fn step(app: &App, w: &Work) -> Result<()> {
     let mut last_error = String::from("no compatible model");
     let mut accepted = None;
     let prior_calls = objects(&app.db.list(owner, "model_call", Some(rid))?);
-    let reason = if continuation {
+    let reason = if progress {
+        "progress"
+    } else if continuation {
         "goal"
     } else if round == 0 {
         "input"
@@ -414,17 +450,43 @@ async fn step(app: &App, w: &Work) -> Result<()> {
         let previous = prior_calls.iter().find(|c| c["call_key"] == key);
         let limit = agent["context_bytes"].as_u64().unwrap_or(256_000) as usize;
         let mut covered = Vec::new();
+        let mut covered_events = Vec::new();
+        let mut compaction_revision = Value::Null;
         if previous.is_none() && serde_json::to_vec(&messages)?.len() > limit {
-            let summary = context::compact(&app.http, &provider.route(), &messages, limit)
-                .await
-                .map_err(|e| anyhow!(e.to_string()))?;
+            let compact = app
+                .catalog
+                .compaction_prompt()
+                .map_err(anyhow::Error::msg)?
+                .context("required input exceeds budget and compaction is disabled")?;
+            let summary = context::compact(
+                &app.http,
+                &provider.route(),
+                &messages,
+                limit,
+                s(&compact, "prompt")?,
+            )
+            .await
+            .map_err(|e| anyhow!(e.to_string()))?;
+            compaction_revision = compact["revision"].clone();
+            for (start, end) in &summary.covered {
+                covered_events.extend(
+                    messages[*start..*end]
+                        .iter()
+                        .filter_map(|m| m.get("source_event_id").cloned()),
+                );
+            }
             messages = summary.messages;
             covered = summary.covered;
         }
         let call = if let Some(old) = previous {
             old.clone()
         } else {
-            let req = json!({"call_key":key,"model":name,"provider_model":provider.model,"reason":reason,"messages":messages,"compressed_ranges":covered,"tools":schema,"tool_directory":directory,"goal_policy":policy,"status":"pending"});
+            let offered_directory = if progress {
+                &[][..]
+            } else {
+                directory.as_slice()
+            };
+            let req = json!({"call_key":key,"model":name,"provider_model":provider.model,"reason":reason,"messages":messages,"compressed_ranges":covered,"compressed_events":covered_events,"compaction_revision":compaction_revision,"tools":schema,"tool_directory":offered_directory,"goal_policy":policy,"status":"pending"});
             app.db.record_call(w, "model_call", req)?
         };
         if call["status"] == "completed" {
@@ -478,6 +540,15 @@ async fn step(app: &App, w: &Work) -> Result<()> {
     let message = accepted.ok_or_else(|| anyhow!(last_error))?;
     let requests = objects(&message["tool_calls"]);
     let answer = message["content"].as_str().unwrap_or("").to_owned();
+    if progress {
+        let patch = if requests.is_empty() && !answer.trim().is_empty() {
+            json!({"progress_message":answer,"progress":answer,"round":round+1})
+        } else {
+            json!({"progress_requested":false,"progress_error":"progress sampling requires a text response","round":round+1})
+        };
+        app.db.finish(w, "waiting", patch)?;
+        return Ok(());
+    }
     if requests.is_empty() {
         if answer.trim().is_empty() {
             bail!("empty final response")
@@ -577,5 +648,5 @@ fn input_message(event: &Value) -> Value {
         .or(event.get("data"))
         .cloned()
         .unwrap_or_default();
-    json!({"role":"user","content":if v.is_string()||v.is_array(){v}else{json!(v.to_string())}})
+    json!({"role":"user","context_protected":true,"content":if v.is_string()||v.is_array(){v}else{json!(v.to_string())}})
 }

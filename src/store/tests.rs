@@ -187,6 +187,96 @@ fn early_and_late_receipts_awaken_only_when_all_children_terminate() {
 }
 
 #[test]
+fn progress_reply_preserves_a_ci_receipt_consumed_while_the_worker_is_running() -> Result<()> {
+    let store = Store::open(":memory:")?;
+    let (sid, rid, initial) = setup(&store);
+    let call = store.record_call(&initial, "tool_call", json!({"tool_id":"ci.submit"}))?;
+    let cid = field(&call, "id")?;
+    store.receive_tool_result(
+        "u",
+        cid,
+        json!({"status":"accepted","job_id":"T42"}),
+        "accepted",
+    )?;
+    let pending = json!([{"id":cid,"provider_id":"provider-ci"}]);
+    let waiting = json!([cid]);
+    let saved = store.finish(
+        &initial,
+        "waiting",
+        json!({"waiting_for":waiting,"pending_batch":pending}),
+    )?;
+    assert_eq!(saved["status"], "waiting");
+
+    let event = store.post_event(
+        "u",
+        json!({"type":"message","text":"What is the CI status?"}),
+        None,
+    )?;
+    let request =
+        json!({"action":"add_input","run_id":rid,"target":{"session_id":sid},"respond_now":true});
+    let deliver = || {
+        store.deliver(
+            "u",
+            field(&event, "id")?,
+            request.clone(),
+            Some("ci-progress"),
+        )
+    };
+    let delivery = deliver()?;
+    let progress = store.claim("progress", 120)?.unwrap();
+    assert_eq!(progress.run["id"], rid);
+    assert_eq!(progress.run["progress_requested"], true);
+
+    let receipt = store.receive_tool_result(
+        "u",
+        cid,
+        json!({"status":"failed","job_id":"T42","error":"E421"}),
+        "final",
+    )?;
+    let eid = field(&receipt, "receipt_event_id")?;
+    assert!(store.consume_event("runtime", eid)?);
+    assert!(store.claim("analysis", 120)?.is_none());
+    let message = "CI job T42 was accepted.";
+    let queued = store.finish(&progress, "waiting", json!({"progress_message":message}))?;
+    assert_eq!(queued["status"], "queued");
+    assert_eq!(queued["wake_reason"], "tool_result");
+    assert_eq!(queued["waiting_for"], waiting);
+    assert_eq!(queued["pending_batch"], pending);
+
+    assert_eq!(deliver()?["id"], delivery["id"]);
+    assert!(!store.consume_event("runtime", eid)?);
+    let analysis = store.claim("analysis", 120)?.unwrap();
+    assert_eq!(analysis.run["id"], rid);
+    assert_ne!(analysis.run["progress_requested"], true);
+    let history = store.history("u", &sid)?;
+    let replies: Vec<_> = history
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["role"] == "assistant")
+        .collect();
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0]["content"], message);
+    let events = store.list("u", "event", None)?;
+    assert_eq!(
+        events
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["run_id"] == rid && event["type"] == "run.wait_satisfied")
+            .count(),
+        1
+    );
+    store.finish(
+        &analysis,
+        "completed",
+        json!({"output":"CI failed with E421."}),
+    )?;
+    assert!(store.claim("analysis", 120)?.is_none());
+    Ok(())
+}
+
+#[test]
 fn cancellation_fences_worker_and_late_receipt_only_updates_call() {
     let s = Store::open(":memory:").unwrap();
     let (sid, rid, w) = setup(&s);

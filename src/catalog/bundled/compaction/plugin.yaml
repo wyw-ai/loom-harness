@@ -1,0 +1,6 @@
+apiVersion: loom/v1alpha1
+kind: PluginPackage
+id: compaction
+version: "1.0.0"
+entrypoint: plugin.lua
+description: Supply the instructions for summarizing selected historical messages.

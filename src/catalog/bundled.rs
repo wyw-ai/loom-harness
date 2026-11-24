@@ -3,6 +3,11 @@ use rusqlite::TransactionBehavior;
 
 const OFFICIAL: &[(&str, &str, &str)] = &[
     (
+        "compaction",
+        include_str!("bundled/compaction/plugin.yaml"),
+        include_str!("bundled/compaction/plugin.lua"),
+    ),
+    (
         "goal",
         include_str!("bundled/goal/plugin.yaml"),
         include_str!("bundled/goal/plugin.lua"),
@@ -89,15 +94,20 @@ impl Catalog {
         Ok(Some(meta))
     }
     pub fn suggestion_prompt(&self) -> R<Option<Value>> {
-        let Some((mut meta, result)) =
-            self.strategy("composer-suggestions", "suggestion_prompt", &json!({}))?
-        else {
+        self.text_strategy("composer-suggestions", "suggestion_prompt")
+    }
+    pub fn compaction_prompt(&self) -> R<Option<Value>> {
+        self.text_strategy("compaction", "compaction_prompt")
+    }
+    fn text_strategy(&self, instance: &str, registration: &str) -> R<Option<Value>> {
+        let Some((mut meta, result)) = self.strategy(instance, registration, &json!({}))? else {
             return Ok(None);
         };
         meta["prompt"] = json!(
             result
                 .as_str()
-                .ok_or("invalid: expected suggestion prompt")?
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| format!("invalid: {registration} must return a nonempty string"))?
         );
         Ok(Some(meta))
     }
@@ -112,5 +122,57 @@ impl Catalog {
             "read_private":rule["read_private"].as_bool().unwrap_or(false),
             "timeout_ms":rule["timeout_ms"].as_u64().unwrap_or(15000),
             "max_samples_per_minute":rule["max_samples_per_minute"].as_u64().unwrap_or(30)}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn compaction_uses_the_enabled_lua_package_revision() {
+        let home = tempfile::tempdir().unwrap();
+        let catalog = Catalog::open(home.path()).unwrap();
+        let original = catalog.compaction_prompt().unwrap().unwrap();
+        assert_eq!(original["instance"], "compaction");
+        assert!(
+            original["prompt"]
+                .as_str()
+                .unwrap()
+                .starts_with("Summarize")
+        );
+        let route = "/api/plugins/compaction";
+        catalog
+            .manage("operator", true, "PATCH", route, json!({"enabled":false}))
+            .await
+            .unwrap();
+        drop(catalog);
+        let catalog = Catalog::open(home.path()).unwrap();
+        assert!(catalog.compaction_prompt().unwrap().is_none());
+        let source = "return function(loom) loom.register_compaction_prompt(function() return 'Summarize failure evidence.' end) end";
+        catalog
+            .manage(
+                "operator",
+                true,
+                "POST",
+                "/api/plugins/compaction/versions",
+                json!({"version":"2.0.0","code":source}),
+            )
+            .await
+            .unwrap();
+        catalog
+            .manage(
+                "operator",
+                true,
+                "PATCH",
+                route,
+                json!({"enabled":true,"version":"2.0.0"}),
+            )
+            .await
+            .unwrap();
+        let current = catalog.compaction_prompt().unwrap().unwrap();
+        assert_eq!(current["version"], "2.0.0");
+        assert_ne!(current["revision"], original["revision"]);
+        assert_eq!(current["prompt"], "Summarize failure evidence.");
     }
 }

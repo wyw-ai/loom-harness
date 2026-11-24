@@ -101,6 +101,7 @@ pub(crate) fn package(code: &str) -> R<(Lua, Table, Table)> {
         ("register_trigger", "loom.trigger"),
         ("register_goal_strategy", "loom.goal_strategy"),
         ("register_suggestion_prompt", "loom.suggestion_prompt"),
+        ("register_compaction_prompt", "loom.compaction_prompt"),
     ] {
         let register = lua
             .create_function(move |vm, f: Function| {

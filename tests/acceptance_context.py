@@ -2,6 +2,7 @@
 
 Run after cargo build: python tests/acceptance_context.py -v
 """
+
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,14 +17,27 @@ from harness import Instance, ROOT
 
 
 def answer(text):
-    return {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": text}}]}
+    return {
+        "choices": [
+            {"finish_reason": "stop", "message": {"role": "assistant", "content": text}}
+        ]
+    }
 
 
 def tool(name, args):
-    call = {"id": "call_" + uuid4().hex, "type": "function",
-            "function": {"name": name, "arguments": json.dumps(args)}}
-    return {"choices": [{"finish_reason": "tool_calls",
-                         "message": {"role": "assistant", "content": None, "tool_calls": [call]}}]}
+    call = {
+        "id": "call_" + uuid4().hex,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(args)},
+    }
+    return {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {"role": "assistant", "content": None, "tool_calls": [call]},
+            }
+        ]
+    }
 
 
 class Provider:
@@ -41,12 +55,16 @@ class Provider:
                 if self.path != "/v1/chat/completions":
                     self.send_error(404)
                     return
-                payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                payload = json.loads(
+                    self.rfile.read(int(self.headers["Content-Length"]))
+                )
                 provider.calls.append(payload)
                 try:
                     result = provider.respond(payload)
                     status = result if isinstance(result, int) else 200
-                    body = json.dumps({} if isinstance(result, int) else result).encode()
+                    body = json.dumps(
+                        {} if isinstance(result, int) else result
+                    ).encode()
                 except Exception as exc:
                     provider.errors.append(exc)
                     body, status = b"{}", 500
@@ -74,22 +92,52 @@ class ContextAcceptance(unittest.TestCase):
         self.provider = Provider()
         self.addCleanup(self.provider.stop)
         port = self.provider.http.server_address[1]
-        routes = {name: {"base_url": f"http://127.0.0.1:{port}/v1", "model": name,
-                         "images": name != "text"} for name in ("primary", "backup", "text")}
-        self.app = Instance({"LOOM_MODEL_ROUTES": json.dumps(routes), "LOOM_DEFAULT_MODEL": "primary",
-                             "LOOM_NOTE_THRESHOLD": "1000", "LOOM_NOTE_READ_BUDGET": "6000"}, start=False)
+        routes = {
+            name: {
+                "base_url": f"http://127.0.0.1:{port}/v1",
+                "model": name,
+                "images": name != "text",
+            }
+            for name in ("primary", "backup", "text")
+        }
+        self.app = Instance(
+            {
+                "LOOM_MODEL_ROUTES": json.dumps(routes),
+                "LOOM_DEFAULT_MODEL": "primary",
+                "LOOM_NOTE_THRESHOLD": "1000",
+                "LOOM_NOTE_READ_BUDGET": "6000",
+            },
+            start=False,
+        )
         self.addCleanup(self.app.__exit__, None, None, None)
         local = self.app.home / "tools" / "ci"
         local.mkdir(parents=True)
-        (local / "tool.yaml").write_text(json.dumps({
-            "id": "ci", "handler": "handler.lua", "exposure": "direct",
-            "input_schema": {"type": "object"}, "allowed_agents": ["agent"],
-        }), encoding="utf8")
+        (local / "tool.yaml").write_text(
+            json.dumps(
+                {
+                    "id": "ci",
+                    "handler": "handler.lua",
+                    "exposure": "direct",
+                    "input_schema": {"type": "object"},
+                    "allowed_agents": ["agent"],
+                }
+            ),
+            encoding="utf8",
+        )
         (local / "handler.lua").write_text(
-            'return function(ctx,args) return {status="accepted",job_id="T42"} end', encoding="utf8")
+            'return function(ctx,args) return {status="accepted",job_id="T42"} end',
+            encoding="utf8",
+        )
         self.app.start()
-        self.app.api("POST", "agents", {"id": "agent", "model": {"default": "primary", "fallbacks": ["backup"]},
-                                          "tools": [{"toolset": "loom.daily"}, {"tool": "home.ci"}]})
+        self.app.api(
+            "POST",
+            "agents",
+            {
+                "id": "agent",
+                "model": {"default": "primary", "fallbacks": ["backup"]},
+                "tools": [{"toolset": "loom.daily"}, {"tool": "home.ci"}],
+            },
+        )
         self.sid = self.session()
 
     def tearDown(self):
@@ -101,7 +149,9 @@ class ContextAcceptance(unittest.TestCase):
     def run_wait(self, text, *, sid=None, status="completed", **fields):
         rid = self.app.send(sid or self.sid, text, **fields)["run_id"]
         result = self.app.wait(rid, (status, "failed", "cancelled"), timeout=10)
-        self.assertEqual(result["status"], status, result.get("error") or result.get("stop_reason"))
+        self.assertEqual(
+            result["status"], status, result.get("error") or result.get("stop_reason")
+        )
         return result
 
     def calls(self, run, kind="model"):
@@ -117,36 +167,60 @@ class ContextAcceptance(unittest.TestCase):
     def sample(self, run, version=None, token="user-token"):
         if version is None:
             version = self.app.api("GET", f"sessions/{self.sid}")["version"]
-        return self.app.api("POST", f"sessions/{self.sid}/suggestions",
-                            {"expected_version": version, "after_reply_id": run["id"]}, token=token)
+        return self.app.api(
+            "POST",
+            f"sessions/{self.sid}/suggestions",
+            {"expected_version": version, "after_reply_id": run["id"]},
+            token=token,
+        )
 
-    def note_call(self, name, **arguments):
-        code_args = ",".join(f'[{json.dumps(k)}]={json.dumps(v,ensure_ascii=False)}' for k, v in arguments.items())
-        sequence = iter([tool("code_exec", {"code": f'return tools.call("{name}", {{{code_args}}})'}),
-                         answer("note operation completed")])
+    def note_call(self, name, *, sid=None, expected_status="completed", **arguments):
+        code_args = ",".join(
+            f"[{json.dumps(k)}]={json.dumps(v, ensure_ascii=False)}"
+            for k, v in arguments.items()
+        )
+        sequence = iter(
+            [
+                tool(
+                    "code_exec",
+                    {"code": f'return tools.call("{name}", {{{code_args}}})'},
+                ),
+                answer("note operation completed"),
+            ]
+        )
         self.provider.respond = lambda payload: next(sequence)
-        r = self.run_wait(name)
+        r = self.run_wait(name, sid=sid)
         c = next(c for c in self.calls(r, "tool") if c["tool_id"] == name)
-        self.assertEqual(c["status"], "completed", c.get("error"))
-        return c["result"]
+        self.assertEqual(c["status"], expected_status, c.get("error"))
+        return c["result"] if expected_status == "completed" else c["error"]
 
     def start_ci(self, **fields):
-        self.provider.respond = lambda payload: tool("home_dci", {"job_name": "发布验收"})
+        self.provider.respond = lambda payload: tool(
+            "home_dci", {"job_name": "发布验收"}
+        )
         r = self.run_wait("start T42", status="waiting", **fields)
         c = next(c for c in self.calls(r, "tool") if c["tool_id"] == "home.ci")
         self.assertEqual(c["job_id"], "T42")
         return r, c
 
     def receipt(self, call, value, key=None):
-        return self.app.api("POST", f"tool-calls/{call['id']}/results",
-                            {"job_id": "T42", "status": "completed", "result": value},
-                            token="source-token", key=key or uuid4().hex)
+        return self.app.api(
+            "POST",
+            f"tool-calls/{call['id']}/results",
+            {"job_id": "T42", "status": "completed", "result": value},
+            token="source-token",
+            key=key or uuid4().hex,
+        )
 
     def test_c01_one_event_two_deliveries(self):
         event = self.app.api("POST", "events", {"content": "build QA-715 failed"})
         address = f"events/{event['id']}/deliveries"
-        archive = self.app.api("POST", address, {"target": {"session_id": self.sid}, "action": "attach"})
-        investigate = self.app.api("POST", address, {"target": {"agent_id": "agent"}, "action": "start_run"})
+        archive = self.app.api(
+            "POST", address, {"target": {"session_id": self.sid}, "action": "attach"}
+        )
+        investigate = self.app.api(
+            "POST", address, {"target": {"agent_id": "agent"}, "action": "start_run"}
+        )
         self.assertNotEqual(archive["id"], investigate["id"])
         self.assertEqual(len(self.app.api("GET", address)), 2)
         self.assertEqual(self.history()[0]["event_id"], event["id"])
@@ -156,6 +230,7 @@ class ContextAcceptance(unittest.TestCase):
     def test_c02_context_hook_and_sections_refreshed_without_new_session(self):
         def admin(method, path, value):
             return self.app.api(method, path, value, token="admin-token")
+
         select = """return function(loom)
           loom.register_context(function(ctx, input)
             local out = {}
@@ -168,21 +243,46 @@ class ContextAcceptance(unittest.TestCase):
           end)
         end"""
         admin("POST", "plugins/selector/versions", {"version": "1", "code": select})
-        admin("POST", "plugins", {"id": "selector", "package": "selector", "version": "1",
-                                  "enabled": True, "allowed_agents": ["section-agent"]})
+        admin(
+            "POST",
+            "plugins",
+            {
+                "id": "selector",
+                "package": "selector",
+                "version": "1",
+                "enabled": True,
+                "allowed_agents": ["section-agent"],
+            },
+        )
         for version in ("1", "2"):
             source = f"return function(loom) loom.register_section({{id='guide',text='guide-v{version}'}}) end"
-            admin("POST", "plugins/guide/versions", {"version": version, "code": source})
-        admin("POST", "plugins", {"id": "guide", "package": "guide", "version": "1",
-                                  "enabled": True, "allowed_agents": ["section-agent"]})
-        self.app.api("POST", "agents", {"id": "section-agent", "context_plugin": "selector"})
+            admin(
+                "POST", "plugins/guide/versions", {"version": version, "code": source}
+            )
+        admin(
+            "POST",
+            "plugins",
+            {
+                "id": "guide",
+                "package": "guide",
+                "version": "1",
+                "enabled": True,
+                "allowed_agents": ["section-agent"],
+            },
+        )
+        self.app.api(
+            "POST", "agents", {"id": "section-agent", "context_plugin": "selector"}
+        )
         s = self.session("section-agent")
         for text in ("A-marker", "B-marker", "C-marker"):
             self.app.send(s, text, action="attach")
         first = self.run_wait("inspect", sid=s)
         initial = self.calls(first)[0]["messages"]
         self.assertIn("guide-v1", initial[0]["content"])
-        self.assertEqual([m["content"] for m in initial[1:]], ["C-marker", "A-marker-edited", "inspect"])
+        self.assertEqual(
+            [m["content"] for m in initial[1:]],
+            ["C-marker", "A-marker-edited", "inspect"],
+        )
         admin("PATCH", "plugins/guide", {"version": "2"})
         second = self.calls(self.run_wait("inspect again", sid=s))[0]["messages"]
         self.assertIn("guide-v2", second[0]["content"])
@@ -194,22 +294,96 @@ class ContextAcceptance(unittest.TestCase):
         self.assertEqual(self.calls(first)[0]["messages"], initial)
 
     def test_c03_c08_compress_evidence_and_fail_when_required_input_cannot_fit(self):
-        self.app.api("POST", "agents", {"id": "small", "context_bytes": 900, "tools": []})
+        self.app.api(
+            "POST", "agents", {"id": "small", "context_bytes": 900, "tools": []}
+        )
         sid = self.session("small")
         for evidence in ("initial", "obsolete-" * 200, "recent"):
             self.app.send(sid, evidence, action="attach")
-        self.provider.respond = lambda p: answer("summary-marker" if not p.get("tools")
-            and "Summarize" in p["messages"][0]["content"] else "analysis")
+        self.provider.respond = lambda p: answer(
+            "summary-marker"
+            if not p.get("tools") and "Summarize" in p["messages"][0]["content"]
+            else "analysis"
+        )
         run = self.run_wait("analyze only", sid=sid)
         call = self.calls(run)[-1]
         self.assertTrue(call["compressed_ranges"])
-        self.assertIn("summary-marker", json.dumps(call["messages"], ensure_ascii=False))
+        self.assertIn(
+            "summary-marker", json.dumps(call["messages"], ensure_ascii=False)
+        )
         self.assertIn("analyze only", str(call["messages"]))
         self.assertIn("obsolete-", self.history(sid)[1]["content"])
         self.assertEqual(len(self.calls(run, "tool")), 0)
         goal = {"objective": "required-" * 300, "completion_condition": "report"}
-        failed = self.run_wait("oversize", sid=self.session("small"), goal=goal, status="failed")
+        failed = self.run_wait(
+            "oversize", sid=self.session("small"), goal=goal, status="failed"
+        )
         self.assertIn("budget", failed["error"])
+
+    def test_c03_read_only_progress_with_an_outstanding_job(self):
+        self.app.api("PATCH", "agents/agent", {"context_bytes": 3500})
+        for line in ("first evidence", "historical event " * 600, "latest fact"):
+            self.app.send(self.sid, line, action="attach")
+        summaries = []
+
+        def response(request):
+            system = request["messages"][0]["content"]
+            if "Summarize" in system:
+                summaries.append(request)
+                return answer("prior history condensed")
+            if "read-only progress update" in system:
+                self.assertNotIn("tools", request)
+                return answer("T42 still running")
+            if any("FINAL_REPORT" in str(m["content"]) for m in request["messages"]):
+                return answer("final E421")
+            return tool("home_dci", {"job_name": "发布验收"})
+
+        self.provider.respond = response
+        run = self.run_wait("只读分析现有报告。", status="waiting")
+        call = next(c for c in self.calls(run, "tool") if c["tool_id"] == "home.ci")
+        eid = self.app.api(
+            "POST", "events", {"content": "先列出已知现象，仍不要重跑。"}
+        )["id"]
+        for _ in range(2):
+            self.app.api(
+                "POST",
+                f"events/{eid}/deliveries",
+                {
+                    "action": "add_input",
+                    "run_id": run["id"],
+                    "respond_now": True,
+                    "target": {"session_id": self.sid},
+                },
+                key="one-progress",
+            )
+        state = self.app.wait(run["id"], ("waiting", "failed"))
+        self.assertEqual(state["status"], "waiting", state.get("error"))
+        self.assertEqual(state["progress"], "T42 still running")
+        self.assertEqual(
+            [m["content"] for m in self.history() if m.get("status") == "progress"],
+            ["T42 still running"],
+        )
+        calls = self.calls(run)
+        self.assertEqual([c["reason"] for c in calls], ["input", "progress"])
+        sample = calls[-1]
+        self.assertTrue(sample["compaction_revision"])
+        for required in ("只读分析", "仍不要重跑", call["id"], "T42", "accepted"):
+            self.assertIn(required, json.dumps(sample["messages"], ensure_ascii=False))
+        originals = [
+            self.app.api("GET", f"events/{id}") for id in sample["compressed_events"]
+        ]
+        self.assertTrue(any("historical event" in doc["content"] for doc in originals))
+        self.assertEqual(len(self.calls(run, "tool")), 1)
+        self.receipt(call, "FINAL_REPORT E421")
+        self.assertEqual(self.app.wait(run["id"])["output"], "final E421")
+        self.assertEqual(len(self.calls(run, "tool")), 1)
+        self.app.api(
+            "PATCH", "plugins/compaction", {"enabled": False}, token="admin-token"
+        )
+        count = len(summaries)
+        failed = self.run_wait("analyze history", status="failed")
+        self.assertIn("compaction is disabled", failed["error"])
+        self.assertEqual(len(summaries), count)
 
     def test_c04_branch_cut_and_late_report(self):
         for text in ("E1", "E2", "secret-after-cut"):
@@ -217,7 +391,9 @@ class ContextAcceptance(unittest.TestCase):
         parent, call = self.start_ci()
         child = self.app.api("POST", f"sessions/{self.sid}/branches", {"at": 2})
         self.assertEqual(child["parent_session_id"], self.sid)
-        self.assertEqual([m["content"] for m in self.history(child["id"])], ["E1", "E2"])
+        self.assertEqual(
+            [m["content"] for m in self.history(child["id"])], ["E1", "E2"]
+        )
         self.provider.respond = lambda payload: answer("report received")
         self.receipt(call, "parent report")
         self.assertEqual(self.app.wait(parent["id"])["status"], "completed")
@@ -227,19 +403,95 @@ class ContextAcceptance(unittest.TestCase):
         self.assertNotIn("parent report", child_input)
         self.assertEqual(len(self.calls(result, "tool")), 0)
 
+    def test_c04_branch_inside_parent_summary_excludes_after_cut_facts(self):
+        self.app.api(
+            "POST", "agents", {"id": "small-branch", "context_bytes": 1600, "tools": []}
+        )
+        sid = self.session("small-branch")
+        for text in [
+            "independent opener",
+            "E1-cut-marker",
+            "E2-cut-marker",
+            "E3-after-cut " + "closed work " * 350,
+        ]:
+            self.app.send(sid, text, action="attach")
+        summarized = []
+
+        def model(payload):
+            if "Summarize" in payload["messages"][0]["content"]:
+                history = json.loads(payload["messages"][1]["content"])
+                summarized.extend(m["content"] for m in history)
+                return answer(
+                    "E1-cut-marker, E2-cut-marker and E3-after-cut; summary-only-private-suffix"
+                )
+            return answer("review finished")
+
+        self.provider.respond = model
+        parent = self.run_wait("review all three", sid=sid)
+        saved = self.calls(parent)[-1]
+        self.assertTrue(saved["compressed_ranges"])
+        self.assertEqual(
+            [text.split()[0] for text in summarized],
+            ["E1-cut-marker", "E2-cut-marker", "E3-after-cut"],
+        )
+        self.assertIn("summary-only-private-suffix", str(saved["messages"]))
+        items = self.history(sid)
+        cut = next(
+            i
+            for i, entry in enumerate(items, start=1)
+            if entry["content"] == "E2-cut-marker"
+        )
+        child = self.app.api("POST", f"sessions/{sid}/branches", {"at": cut})["id"]
+        self.provider.respond = lambda p: answer("child review")
+        child_run = self.run_wait("review inherited evidence", sid=child)
+        saved_child = self.calls(child_run)[0]["messages"]
+        actual = self.provider.calls[-1]["messages"]
+        self.assertEqual(
+            [(m["role"], m["content"]) for m in saved_child],
+            [(m["role"], m["content"]) for m in actual],
+        )
+        self.assertIn("E1-cut-marker", str(actual))
+        self.assertIn("E2-cut-marker", str(actual))
+        self.assertNotIn("E3-after-cut", str(actual))
+        self.assertNotIn("summary-only-private-suffix", str(actual))
+        self.trace(
+            "C04",
+            parent=parent["id"],
+            parent_model=saved["id"],
+            child=child,
+            child_run=child_run["id"],
+        )
+
     def test_c05_c06_goal_continuation_budget_and_wait_cancel(self):
-        goal = {"objective": "migrate twenty", "completion_condition": "twenty complete; tests pass"}
-        steps = iter([answer("fourteen complete"), tool("goal_complete", {"evidence": "twenty complete; tests pass"}),
-                      answer("final report")])
+        goal = {
+            "objective": "migrate twenty",
+            "completion_condition": "twenty complete; tests pass",
+        }
+        steps = iter(
+            [
+                answer("fourteen complete"),
+                tool("goal_complete", {"evidence": "twenty complete; tests pass"}),
+                answer("final report"),
+            ]
+        )
         self.provider.respond = lambda p: next(steps)
         r = self.run_wait("migrate", goal=goal)
         calls = self.calls(r)
         self.assertEqual([c["reason"] for c in calls], ["input", "goal", "tool_result"])
-        self.assertEqual([sum(m.get("source") == "goal" for m in c["messages"]) for c in calls], [0, 1, 0])
-        self.assertEqual([m["content"] for m in self.history() if m["role"] == "user"], ["migrate"])
-        self.assertTrue(all(goal["completion_condition"] in str(c["messages"]) for c in calls))
+        self.assertEqual(
+            [sum(m.get("source") == "goal" for m in c["messages"]) for c in calls],
+            [0, 1, 0],
+        )
+        self.assertEqual(
+            [m["content"] for m in self.history() if m["role"] == "user"], ["migrate"]
+        )
+        self.assertTrue(
+            all(goal["completion_condition"] in str(c["messages"]) for c in calls)
+        )
         self.provider.respond = lambda p: answer("still working")
-        stopped = self.run_wait("continue", goal={**goal, "max_rounds": 2}, status="failed")
+        stopped = self.run_wait(
+            "continue", goal={**goal, "max_rounds": 2}, status="failed"
+        )
         self.assertIn("budget", stopped["stop_reason"])
         self.assertEqual(len(self.calls(stopped)), 2)
         waiting, call = self.start_ci(goal=goal)
@@ -258,6 +510,7 @@ class ContextAcceptance(unittest.TestCase):
         entered, release = Event(), Event()
         wire_attempts = []
         summaries = []
+
         def crash_window(payload):
             messages = payload["messages"]
             if "Summarize" in messages[0]["content"]:
@@ -272,10 +525,16 @@ class ContextAcceptance(unittest.TestCase):
                     entered.set()
                     if not release.wait(6):
                         raise TimeoutError("continuation fixture not released")
-                return tool("goal_complete", {"evidence": "verified 20 and passing report"})
+                return tool(
+                    "goal_complete", {"evidence": "verified 20 and passing report"}
+                )
             return answer("fourteen completed")
+
         self.provider.respond = crash_window
-        goal = {"objective": "migrate twenty", "completion_condition": "all twenty completed and passing report"}
+        goal = {
+            "objective": "migrate twenty",
+            "completion_condition": "all twenty completed and passing report",
+        }
         run_id = self.app.send(self.sid, "migration request", goal=goal)["run_id"]
         try:
             self.assertTrue(entered.wait(5))
@@ -293,28 +552,44 @@ class ContextAcceptance(unittest.TestCase):
         self.assertEqual([c["id"] for c in replayed], [pending["id"]])
         self.assertEqual(len(wire_attempts), 2)
         self.assertEqual(wire_attempts[0], wire_attempts[1])
-        self.assertEqual(len([marker for marker in summaries if marker in str(wire_attempts[0])]), 1)
-        self.assertEqual(sum(m.get("source") == "goal" for m in replayed[0]["messages"]), 1)
+        self.assertEqual(
+            len([marker for marker in summaries if marker in str(wire_attempts[0])]), 1
+        )
+        self.assertEqual(
+            sum(m.get("source") == "goal" for m in replayed[0]["messages"]), 1
+        )
         self.assertEqual(self.history()[-1]["run_id"], run_id)
         self.assertEqual(len(self.app.api("GET", f"sessions/{self.sid}/runs")), 1)
-        self.trace("C05", run=run_id, continuation=pending["id"], actual_attempts=len(wire_attempts))
+        self.trace(
+            "C05",
+            run=run_id,
+            continuation=pending["id"],
+            actual_attempts=len(wire_attempts),
+        )
 
     def test_c07_repeated_receipt_resumes_goal_once(self):
         g = {"objective": "analyze T42", "completion_condition": "analyze failure"}
         self.app.api("PATCH", "agents/agent", {"context_bytes": 9000})
         for text in ("first", "closed migration steps " * 1500, "last"):
             self.app.send(self.sid, text, action="attach")
+
         def issue(payload):
             if "Summarize" in payload["messages"][0]["content"]:
                 return answer("completed migration steps")
             return tool("home_dci", {"job_name": "发布验收"})
+
         self.provider.respond = issue
         r = self.run_wait("start T42", status="waiting", goal=g)
         call = next(c for c in self.calls(r, "tool") if c["tool_id"] == "home.ci")
         self.assertTrue(self.calls(r)[0]["compressed_ranges"])
-        seq = iter([tool("goal_complete", {"evidence": "read FAIL-42"}), answer("FAIL-42")])
-        self.provider.respond = lambda p: (answer("completed migration steps")
-            if "Summarize" in p["messages"][0]["content"] else next(seq))
+        seq = iter(
+            [tool("goal_complete", {"evidence": "read FAIL-42"}), answer("FAIL-42")]
+        )
+        self.provider.respond = lambda p: (
+            answer("completed migration steps")
+            if "Summarize" in p["messages"][0]["content"]
+            else next(seq)
+        )
         self.receipt(call, "FAIL-42")
         self.receipt(call, "FAIL-42")
         self.assertEqual(self.app.wait(r["id"])["status"], "completed")
@@ -326,16 +601,26 @@ class ContextAcceptance(unittest.TestCase):
         self.assertIn("FAIL-42", str(resumed["messages"]))
         self.assertIn(g["completion_condition"], str(resumed["messages"]))
         self.assertEqual(len(records), 3)
-        self.assertEqual(len([c for c in self.calls(r, "tool") if c["tool_id"] == "home.ci"]), 1)
-        self.trace("C07", run=r["id"], receipt_call=call["id"], resumed_model_call=resumed["id"])
+        self.assertEqual(
+            len([c for c in self.calls(r, "tool") if c["tool_id"] == "home.ci"]), 1
+        )
+        self.trace(
+            "C07",
+            run=r["id"],
+            receipt_call=call["id"],
+            resumed_model_call=resumed["id"],
+        )
 
     def test_c08_change_or_cancel_during_compaction(self):
-        self.app.api("POST", "agents", {"id": "compacting", "context_bytes": 1200, "tools": []})
+        self.app.api(
+            "POST", "agents", {"id": "compacting", "context_bytes": 1200, "tools": []}
+        )
         for action in ("add_input", "request_cancel"):
             s = self.session("compacting")
             for piece in ("first", "old material " * 200, "newest"):
                 self.app.send(s, piece, action="attach")
             entered, release = Event(), Event()
+
             def reply(payload):
                 first = payload["messages"][0]["content"]
                 if "Summarize" in first:
@@ -347,6 +632,7 @@ class ContextAcceptance(unittest.TestCase):
                 if payload["messages"][-1]["role"] == "tool":
                     return answer("analysis complete")
                 return tool("goal_complete", {"evidence": "analyzed without rerun"})
+
             self.provider.respond = reply
             g = {"objective": "analyze", "completion_condition": "deliver analysis"}
             rid = self.app.send(s, "inspect the report", goal=g)["run_id"]
@@ -358,7 +644,11 @@ class ContextAcceptance(unittest.TestCase):
             result = self.app.wait(rid)
             calls = self.calls(result)
             if action == "add_input":
-                self.assertEqual(result["status"], "completed", result.get("error") or result.get("stop_reason"))
+                self.assertEqual(
+                    result["status"],
+                    "completed",
+                    result.get("error") or result.get("stop_reason"),
+                )
                 self.assertTrue(calls)
                 self.assertIn("analysis only; no rerun", str(calls[0]["messages"]))
             else:
@@ -366,9 +656,37 @@ class ContextAcceptance(unittest.TestCase):
                 self.assertEqual(calls, [])
             self.assertEqual(self.calls(result, "tool"), [])
 
+        sid = self.session("compacting")
+        for piece in ("first", "prior T42 evidence " * 200, "latest report"):
+            self.app.send(sid, piece, action="attach")
+        attempts = []
+
+        def reject_summary(payload):
+            if "Summarize" not in payload["messages"][0]["content"]:
+                raise AssertionError(
+                    "business inference started after an unrecoverable compaction failure"
+                )
+            attempts.append(payload)
+            return 422
+
+        self.provider.respond = reject_summary
+        failed = self.run_wait("analyze T42 only", sid=sid, goal=g, status="failed")
+        self.assertIn("422", failed["error"])
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(self.calls(failed), [])
+        self.assertEqual(self.calls(failed, "tool"), [])
+
     def test_c09_c10_c11_suggestions_scope_stale_response_and_manual_send(self):
-        event = self.app.api("POST", "events", {"content": "private-sample-marker", "visibility": "agent"})
-        self.app.api("POST", f"events/{event['id']}/deliveries", {"action": "attach", "target": {"session_id": self.sid}})
+        event = self.app.api(
+            "POST",
+            "events",
+            {"content": "private-sample-marker", "visibility": "agent"},
+        )
+        self.app.api(
+            "POST",
+            f"events/{event['id']}/deliveries",
+            {"action": "attach", "target": {"session_id": self.sid}},
+        )
         r = self.run_wait("committed locally")
         history = self.history()
         self.provider.respond = lambda p: answer("push it")
@@ -380,6 +698,7 @@ class ContextAcceptance(unittest.TestCase):
         self.assertIsNone(self.sample(r)["suggestion"])
         self.assertEqual(self.calls(r, "tool"), [])
         entered, release = Event(), Event()
+
         def delay(p):
             if "Suggest one" in p["messages"][0]["content"]:
                 entered.set()
@@ -387,6 +706,7 @@ class ContextAcceptance(unittest.TestCase):
                     raise TimeoutError("suggestion fixture not released")
                 return answer("push it")
             return answer("show diff")
+
         self.provider.respond = delay
         with ThreadPoolExecutor(max_workers=1) as executor:
             outstanding = executor.submit(self.sample, r)
@@ -402,20 +722,44 @@ class ContextAcceptance(unittest.TestCase):
 
     def test_c11_suggestion_permission_revocation_quota_timeout(self):
         def settings(user):
-            self.app.api("PATCH", "settings/composer-suggestions",
-                {"principals": {"qa": {"reviewer": {"read_private": True}, "qa": user}}}, token="admin-token")
+            self.app.api(
+                "PATCH",
+                "settings/composer-suggestions",
+                {
+                    "principals": {
+                        "qa": {"reviewer": {"read_private": True}, "qa": user}
+                    }
+                },
+                token="admin-token",
+            )
+
         settings({"enabled": True, "max_samples_per_minute": 30})
-        event = self.app.api("POST", "events", {"content": "reviewer-only-build", "visibility": "agent"})
-        self.app.api("POST", f"events/{event['id']}/deliveries", {"action": "attach", "target": {"session_id": self.sid}})
+        event = self.app.api(
+            "POST", "events", {"content": "reviewer-only-build", "visibility": "agent"}
+        )
+        self.app.api(
+            "POST",
+            f"events/{event['id']}/deliveries",
+            {"action": "attach", "target": {"session_id": self.sid}},
+        )
         r = self.run_wait("committed")
-        self.provider.respond = lambda p: answer("reviewer-only-candidate" if "reviewer-only-build" in str(p) else "public candidate")
-        self.assertEqual(self.sample(r, token="inspector-token")["suggestion"], "reviewer-only-candidate")
+        self.provider.respond = lambda p: answer(
+            "reviewer-only-candidate"
+            if "reviewer-only-build" in str(p)
+            else "public candidate"
+        )
+        self.assertEqual(
+            self.sample(r, token="inspector-token")["suggestion"],
+            "reviewer-only-candidate",
+        )
         self.assertEqual(self.sample(r)["suggestion"], "public candidate")
         entered, release = Event(), Event()
+
         def delayed(p):
             entered.set()
             release.wait(4)
             return answer("stale candidate")
+
         self.provider.respond = delayed
         with ThreadPoolExecutor(max_workers=1) as executor:
             outstanding = executor.submit(self.sample, r)
@@ -440,16 +784,118 @@ class ContextAcceptance(unittest.TestCase):
         self.assertEqual(self.app.api("GET", f"runs/{r['id']}")["output"], r["output"])
         self.assertEqual(self.calls(r, "tool"), [])
 
+    def test_c11_private_material_and_persisted_summary_are_excluded_from_sampling(
+        self,
+    ):
+        self.app.api(
+            "POST",
+            "agents",
+            {"id": "small-private", "context_bytes": 1600, "tools": []},
+        )
+        self.sid = self.session("small-private")
+        self.app.send(self.sid, "public opener", action="attach")
+        e = self.app.api(
+            "POST",
+            "events",
+            {
+                "visibility": "agent",
+                "content": "original-agent-only-marker " + "restricted log " * 300,
+            },
+        )
+        self.app.api(
+            "POST",
+            f"events/{e['id']}/deliveries",
+            {"action": "attach", "target": {"session_id": self.sid}},
+        )
+
+        def model(payload):
+            if "Summarize" in payload["messages"][0]["content"]:
+                source = payload["messages"][1]["content"]
+                self.assertIn("original-agent-only-marker", source)
+                return answer(
+                    "original-agent-only-marker; derived-private-summary-only"
+                )
+            return answer("public reply")
+
+        self.provider.respond = model
+        r = self.run_wait("review")
+        saved = self.calls(r)[-1]
+        self.assertTrue(saved["compressed_ranges"])
+        self.assertTrue(
+            any(
+                m.get("source") == "compaction"
+                and "derived-private-summary-only" in m["content"]
+                for m in saved["messages"]
+            )
+        )
+        self.provider.respond = lambda p: answer("next public question")
+        self.assertEqual(self.sample(r)["suggestion"], "next public question")
+        sample = self.provider.calls[-1]["messages"]
+        for marker in ("original-agent-only-marker", "derived-private-summary-only"):
+            self.assertNotIn(marker, str(sample))
+        self.assertIn("public reply", str(sample))
+        self.trace("C11", run=r["id"], parent_model=saved["id"], private_event=e["id"])
+
     def test_c12_note_metadata_search_and_line_reads(self):
         first = self.note_call("write_note", description="Release.[one]", body="E421")
-        second = self.note_call("write_note", description="Release.[two]", body="line1\nline2")
+        cut = len(self.history())
+        second = self.note_call(
+            "write_note", description="Release.[two]", body="line1\nline2"
+        )
+        self.assertEqual(
+            self.note_call("read_note", note_ref=first["note_ref"])["body"], "E421"
+        )
+        self.assertEqual(
+            self.note_call("read_note", note_ref=second["note_ref"])["body"],
+            "line1\nline2",
+        )
+        by_date = self.note_call("search_notes")["items"]
+        self.assertEqual(
+            [m["note_ref"] for m in by_date], [second["note_ref"], first["note_ref"]]
+        )
+        self.assertGreater(by_date[0]["created_at"], by_date[1]["created_at"])
+        self.assertEqual([m["line_count"] for m in by_date], [2, 1])
         listed = self.note_call("search_notes", keyword="Release.[", limit=1)
         self.assertEqual(listed["items"][0]["note_ref"], second["note_ref"])
         self.assertNotIn("body", listed["items"][0])
-        following = self.note_call("search_notes", keyword="Release.[", cursor=listed["next_cursor"], limit=1)
+        following = self.note_call(
+            "search_notes", keyword="Release.[", cursor=listed["next_cursor"], limit=1
+        )
         self.assertEqual(following["items"][0]["note_ref"], first["note_ref"])
         self.assertEqual(self.note_call("search_notes", keyword="E421")["items"], [])
-        self.assertEqual(self.note_call("read_note", note_ref=second["note_ref"], start_line=2)["body"], "line2")
+        self.assertEqual(
+            self.note_call("search_notes", keyword="release.[")["items"], []
+        )
+        self.assertEqual(
+            self.note_call("read_note", note_ref=second["note_ref"], start_line=2)[
+                "body"
+            ],
+            "line2",
+        )
+        unrelated = self.session()
+        self.assertIn(
+            "outside this Session",
+            self.note_call(
+                "read_note",
+                sid=unrelated,
+                expected_status="failed",
+                note_ref=first["note_ref"],
+            ),
+        )
+        child = self.app.api("POST", f"sessions/{self.sid}/branches", {"at": cut})["id"]
+        self.assertEqual(
+            self.note_call("read_note", sid=child, note_ref=first["note_ref"])["body"],
+            "E421",
+        )
+        self.assertIn(
+            "outside this Session",
+            self.note_call(
+                "read_note",
+                sid=child,
+                expected_status="failed",
+                note_ref=second["note_ref"],
+            ),
+        )
 
     def test_c13_log_from_history_event_and_restarted_worker(self):
         run, call = self.start_ci()
@@ -468,23 +914,64 @@ class ContextAcceptance(unittest.TestCase):
         meta = self.note_call("search_notes", keyword="发布验收")["items"]
         self.assertEqual([m["note_ref"] for m in meta], [ref])
         self.assertEqual(self.note_call("read_note", note_ref=ref)["body"], log)
-        self.assertEqual(self.note_call("read_note", note_ref=ref, start_line=280, end_line=280)["body"], "E421\n")
-        self.assertEqual(self.note_call("read_note", note_ref=ref, end_line=2)["body"], "log-001\nlog-002\n")
+        self.assertEqual(
+            self.note_call("read_note", note_ref=ref, start_line=280, end_line=280)[
+                "body"
+            ],
+            "E421\n",
+        )
+        self.assertEqual(
+            self.note_call("read_note", note_ref=ref, end_line=2)["body"],
+            "log-001\nlog-002\n",
+        )
+        self.assertEqual(
+            self.note_call("read_note", note_ref=ref, start_line=299)["body"],
+            "log-299\nlog-300",
+        )
         self.app.stop()
         self.app.env["LOOM_NOTE_READ_BUDGET"] = "32"
         self.app.start()
         large = self.note_call("read_note", note_ref=ref)
         self.assertTrue(large["over_budget"])
         self.assertEqual(large["line_count"], 300)
-        self.assertEqual(self.note_call("search_notes")["items"][0]["note_ref"], ref)
-        self.trace("C13", run=run["id"], call=call["id"], result_event=record["event_id"], note=ref)
+        self.assertEqual(large["size_bytes"], len(log.encode()))
+        self.assertIsNone(large["body"])
+        self.assertEqual(
+            self.note_call("read_note", note_ref=ref, start_line=280, end_line=280)[
+                "body"
+            ],
+            "E421\n",
+        )
+        self.assertEqual(
+            [m["note_ref"] for m in self.note_call("search_notes")["items"]], [ref]
+        )
+        self.assertEqual(
+            len([c for c in self.calls(run, "tool") if c["tool_id"] == "home.ci"]), 1
+        )
+        self.trace(
+            "C13",
+            run=run["id"],
+            call=call["id"],
+            result_event=record["event_id"],
+            note=ref,
+        )
 
     def test_c13_mixed_result_parts_keep_origin_type_order_and_bytes(self):
         r, c = self.start_ci()
         self.provider.respond = lambda p: answer("received mixed result")
         first, third = "alpha-" * 400, "omega-" * 300
-        image = {"type": "image", "mimeType": "image/png", "data": "test-opaque-binary-block"}
-        parts = {"content": [{"type": "text", "text": first}, image, {"type": "text", "text": third}]}
+        image = {
+            "type": "image",
+            "mimeType": "image/png",
+            "data": "test-opaque-binary-block",
+        }
+        parts = {
+            "content": [
+                {"type": "text", "text": first},
+                image,
+                {"type": "text", "text": third},
+            ]
+        }
         self.receipt(c, parts, "mixed-original")
         self.receipt(c, parts, "mixed-original")
         self.assertEqual(self.app.wait(r["id"], timeout=12)["status"], "completed")
@@ -493,40 +980,72 @@ class ContextAcceptance(unittest.TestCase):
         self.assertEqual(result[1], image)
         refs = [result[i]["note_ref"] for i in (0, 2)]
         self.assertNotEqual(refs[0], refs[1])
-        stored = next(m for m in self.history() if m.get("tool_call_id") == c["id"] and m["status"] == "completed")
+        stored = next(
+            m
+            for m in self.history()
+            if m.get("tool_call_id") == c["id"] and m["status"] == "completed"
+        )
         self.assertEqual(stored["content"]["content"], result)
-        self.assertIn(refs[0], json.dumps(self.app.api("GET", f"events/{stored['event_id']}")))
+        self.assertIn(
+            refs[0], json.dumps(self.app.api("GET", f"events/{stored['event_id']}"))
+        )
         for index, expected in [(0, first), (1, image), (2, third)]:
             found = self.app.api("GET", f"tool-calls/{c['id']}/results/{index}/content")
             self.assertEqual(found if index == 1 else found["body"], expected)
         with self.assertRaises(HTTPError) as denied:
-            self.app.api("GET", f"tool-calls/{c['id']}/results/0/content", token="other-token")
+            self.app.api(
+                "GET", f"tool-calls/{c['id']}/results/0/content", token="other-token"
+            )
         self.assertEqual(denied.exception.code, 404)
         denied.exception.close()
 
     def test_c14_c15_image_provider_fallback_schema_and_errors(self):
         image = (ROOT / "docs/acceptance/fixtures/report.png").read_bytes()
-        aid = self.app.api("POST", "attachments", {
-            "mime_type": "image/png", "data": base64.b64encode(image).decode()})["id"]
-        content = [{"type": "text", "text": "before"}, {"type": "attachment", "attachment_id": aid},
-                   {"type": "text", "text": "after"}]
+        aid = self.app.api(
+            "POST",
+            "attachments",
+            {"mime_type": "image/png", "data": base64.b64encode(image).decode()},
+        )["id"]
+        content = [
+            {"type": "text", "text": "before"},
+            {"type": "attachment", "attachment_id": aid},
+            {"type": "text", "text": "after"},
+        ]
         seen = []
+
         def with_fallback(payload):
             previous = any(m["role"] == "tool" for m in payload["messages"])
             if payload["model"] == "primary":
                 if previous:
                     return 503
                 return tool("code_exec", {"code": "return {'linux'}"})
-            parts = next(m["content"] for m in payload["messages"] if isinstance(m["content"], list))
-            seen.append((parts[0]["text"], base64.b64decode(parts[1]["image_url"]["url"].split(",")[1]), parts[2]["text"]))
+            parts = next(
+                m["content"]
+                for m in payload["messages"]
+                if isinstance(m["content"], list)
+            )
+            seen.append(
+                (
+                    parts[0]["text"],
+                    base64.b64decode(parts[1]["image_url"]["url"].split(",")[1]),
+                    parts[2]["text"],
+                )
+            )
             return answer('{"case":"checkout_retry","error":"E421"}')
+
         self.provider.respond = with_fallback
-        schema = {"type": "object", "required": ["case", "error"],
-                  "properties": {"case": {"type": "string"}, "error": {"type": "string"}}, "additionalProperties": False}
+        schema = {
+            "type": "object",
+            "required": ["case", "error"],
+            "properties": {"case": {"type": "string"}, "error": {"type": "string"}},
+            "additionalProperties": False,
+        }
         r = self.run_wait(content, result_schema=schema)
         self.assertEqual(seen, [("before", image, "after")])
         self.assertEqual(r["output"], {"case": "checkout_retry", "error": "E421"})
-        self.assertEqual([c["status"] for c in self.calls(r)], ["completed", "failed", "completed"])
+        self.assertEqual(
+            [c["status"] for c in self.calls(r)], ["completed", "failed", "completed"]
+        )
         tools = self.calls(r, "tool")
         self.assertEqual(len(tools), 1)
         self.assertEqual(tools[0]["status"], "completed")
@@ -542,9 +1061,13 @@ class ContextAcceptance(unittest.TestCase):
         unreadable = self.run_wait(content, sid=self.session(), status="failed")
         self.assertIn("attachment", unreadable["error"])
         self.provider.respond = lambda p: answer('{"case":"checkout_retry"}')
-        wrong = self.run_wait("wrong schema", sid=self.session(), result_schema=schema, status="failed")
+        wrong = self.run_wait(
+            "wrong schema", sid=self.session(), result_schema=schema, status="failed"
+        )
         self.assertIn("schema", wrong["error"])
-        self.trace("C14", run=r["id"], attachment=aid, calls=[c["id"] for c in self.calls(r)])
+        self.trace(
+            "C14", run=r["id"], attachment=aid, calls=[c["id"] for c in self.calls(r)]
+        )
 
 
 if __name__ == "__main__":
