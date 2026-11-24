@@ -1,0 +1,180 @@
+mode,observer,round,index,relative_ms,time_shanghai,precision,kind,role,reasoning_chars,tool_argument_chars,tool_names,text,prompt_tokens,completion_tokens,reasoning_tokens,total_tokens,note
+default,loom.sqlite,,1,-0.668,2026-11-24T17:59:49.899+08:00,ms,user_event_insert,user,,,,,,,,,SQLite AFTER INSERT: millisecond precision; may sort just before client send.
+default,client.http,,1,0.000,2026-11-24T17:59:49.899668+08:00,us,event_send,user,,,,请调用工具查询 T42 的 CI 报告，用一句中文告诉我错误码和所在行号。,,,,,
+default,loom.sqlite,,2,2.332,2026-11-24T17:59:49.902+08:00,ms,run.started,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,loom.sqlite,,3,2.332,2026-11-24T17:59:49.902+08:00,ms,delivery.received,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,client.http,,2,2.345,2026-11-24T17:59:49.902013+08:00,us,event_ack,,,,,,,,,,
+default,client.http,,3,2.347,2026-11-24T17:59:49.902015+08:00,us,delivery_send,,,,,,,,,,
+default,loom,,,3.164,2026-11-24T17:59:49.902832+08:00,us,run_admitted,,,,,,,,,,
+default,client.http,,4,5.478,2026-11-24T17:59:49.905146+08:00,us,delivery_ack,,,,,,,,,,
+default,client.http,,5,5.482,2026-11-24T17:59:49.905150+08:00,us,subscribe_send,,,,,,,,,,
+default,loom,,,5.501,2026-11-24T17:59:49.905169+08:00,us,worker_claimed,,,,,,,,,,
+default,client.http,,6,8.403,2026-11-24T17:59:49.908071+08:00,us,subscribe_headers,,,,,,,,,,200
+default,loom.sqlite,1,4,13.332,2026-11-24T17:59:49.913+08:00,ms,model.inference_requested,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,loom,1,,18.297,2026-11-24T17:59:49.917965+08:00,us,model_request_started,,,,,,,,,,input
+default,client.sse,1,1,18.763,2026-11-24T17:59:49.918431+08:00,us,attempt_started,,,,,,,,,,
+default,model.relay,1,1,18.934,2026-11-24T17:59:49.918602+08:00,us,request_message_batch_received,system,,,,,,,,,Messages arrived in a single HTTP request body.
+default,model.relay,1,2,18.934,2026-11-24T17:59:49.918602+08:00,us,request_message_batch_received,user,,,,,,,,,Messages arrived in a single HTTP request body.
+default,model.relay,1,,18.961,2026-11-24T17:59:49.918629+08:00,us,deepseek_request_start,,,,,,,,,,
+default,model.relay,1,,117.229,2026-11-24T17:59:50.016897+08:00,us,deepseek_response_headers,,,,,,,,,,
+default,deepseek.sse_at_relay,1,1,171.946,2026-11-24T17:59:50.071614+08:00,us,role,assistant,,,,,,,,,
+default,deepseek.sse_at_relay,1,2,762.840,2026-11-24T17:59:50.662508+08:00,us,tool_call,,,0,remote_dci_dget_ureport,,,,,,
+default,deepseek.sse_at_relay,1,3,777.266,2026-11-24T17:59:50.676934+08:00,us,tool_call,,,2,,,,,,,
+default,deepseek.sse_at_relay,1,4,777.360,2026-11-24T17:59:50.677028+08:00,us,tool_call,,,3,,,,,,,
+default,deepseek.sse_at_relay,1,5,777.411,2026-11-24T17:59:50.677079+08:00,us,tool_call,,,1,,,,,,,
+default,deepseek.sse_at_relay,1,6,795.647,2026-11-24T17:59:50.695315+08:00,us,tool_call,,,3,,,,,,,
+default,deepseek.sse_at_relay,1,7,795.733,2026-11-24T17:59:50.695401+08:00,us,tool_call,,,1,,,,,,,
+default,deepseek.sse_at_relay,1,8,795.769,2026-11-24T17:59:50.695437+08:00,us,tool_call,,,2,,,,,,,
+default,deepseek.sse_at_relay,1,9,808.408,2026-11-24T17:59:50.708076+08:00,us,tool_call,,,1,,,,,,,
+default,deepseek.sse_at_relay,1,10,808.456,2026-11-24T17:59:50.708124+08:00,us,tool_call,,,1,,,,,,,
+default,deepseek.sse_at_relay,1,11,840.145,2026-11-24T17:59:50.739813+08:00,us,finish+usage,,,,,,354,45,0,399,tool_calls
+default,deepseek.sse_at_relay,1,12,840.221,2026-11-24T17:59:50.739889+08:00,us,done,,,,,,,,,,
+default,model.relay,1,,840.254,2026-11-24T17:59:50.739922+08:00,us,deepseek_http_eof,,,,,,,,,,
+default,loom.sqlite,1,5,846.332,2026-11-24T17:59:50.746+08:00,ms,model.completed,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,loom.sqlite,1,6,856.332,2026-11-24T17:59:50.756+08:00,ms,tool.call_requested,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,client.sse,1,2,865.526,2026-11-24T17:59:50.765194+08:00,us,attempt_finished,,,,,,,,,,
+default,mcp.server,1,,887.325,2026-11-24T17:59:50.786993+08:00,us,tools/call_received,,,,get_report,,,,,,T42
+default,loom.sqlite,1,7,887.332,2026-11-24T17:59:50.787+08:00,ms,tool.result_received,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,mcp.server,1,,887.388,2026-11-24T17:59:50.787056+08:00,us,tools/call_response_send,tool,,,get_report,"T42 failed: error E421, line 280.",,,,,
+default,loom.sqlite,2,8,933.332,2026-11-24T17:59:50.833+08:00,ms,model.inference_requested,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,loom,2,,937.976,2026-11-24T17:59:50.837644+08:00,us,model_request_started,,,,,,,,,,tool_result
+default,client.sse,2,3,938.388,2026-11-24T17:59:50.838056+08:00,us,attempt_started,,,,,,,,,,
+default,model.relay,2,1,938.549,2026-11-24T17:59:50.838217+08:00,us,request_message_batch_received,system,,,,,,,,,Messages arrived in a single HTTP request body.
+default,model.relay,2,2,938.549,2026-11-24T17:59:50.838217+08:00,us,request_message_batch_received,user,,,,,,,,,Messages arrived in a single HTTP request body.
+default,model.relay,2,3,938.549,2026-11-24T17:59:50.838217+08:00,us,request_message_batch_received,assistant,,,,,,,,,Messages arrived in a single HTTP request body.
+default,model.relay,2,4,938.549,2026-11-24T17:59:50.838217+08:00,us,request_message_batch_received,tool,,,,,,,,,Messages arrived in a single HTTP request body.
+default,model.relay,2,,938.580,2026-11-24T17:59:50.838248+08:00,us,deepseek_request_start,,,,,,,,,,
+default,model.relay,2,,1012.839,2026-11-24T17:59:50.912507+08:00,us,deepseek_response_headers,,,,,,,,,,
+default,deepseek.sse_at_relay,2,1,1018.682,2026-11-24T17:59:50.918350+08:00,us,role,assistant,,,,,,,,,
+default,deepseek.sse_at_relay,2,2,1428.701,2026-11-24T17:59:51.328369+08:00,us,content,,,,,T,,,,,
+default,loom,2,,1428.799,2026-11-24T17:59:51.328467+08:00,us,first_content,,,,,,,,,,
+default,deepseek.sse_at_relay,2,3,1441.099,2026-11-24T17:59:51.340767+08:00,us,content,,,,,42,,,,,
+default,deepseek.sse_at_relay,2,4,1441.161,2026-11-24T17:59:51.340829+08:00,us,content,,,,, ,,,,,
+default,deepseek.sse_at_relay,2,5,1441.179,2026-11-24T17:59:51.340847+08:00,us,content,,,,,的,,,,,
+default,deepseek.sse_at_relay,2,6,1441.199,2026-11-24T17:59:51.340867+08:00,us,content,,,,, CI,,,,,
+default,deepseek.sse_at_relay,2,7,1441.232,2026-11-24T17:59:51.340900+08:00,us,content,,,,, ,,,,,
+default,deepseek.sse_at_relay,2,8,1441.246,2026-11-24T17:59:51.340914+08:00,us,content,,,,,报告,,,,,
+default,deepseek.sse_at_relay,2,9,1454.165,2026-11-24T17:59:51.353833+08:00,us,content,,,,,显示,,,,,
+default,deepseek.sse_at_relay,2,10,1454.247,2026-11-24T17:59:51.353915+08:00,us,content,,,,,：,,,,,
+default,deepseek.sse_at_relay,2,11,1454.283,2026-11-24T17:59:51.353951+08:00,us,content,,,,,错误,,,,,
+default,deepseek.sse_at_relay,2,12,1454.311,2026-11-24T17:59:51.353979+08:00,us,content,,,,,码,,,,,
+default,deepseek.sse_at_relay,2,13,1454.335,2026-11-24T17:59:51.354003+08:00,us,content,,,,,为,,,,,
+default,deepseek.sse_at_relay,2,14,1454.360,2026-11-24T17:59:51.354028+08:00,us,content,,,,, E,,,,,
+default,deepseek.sse_at_relay,2,15,1468.102,2026-11-24T17:59:51.367770+08:00,us,content,,,,,421,,,,,
+default,deepseek.sse_at_relay,2,16,1468.181,2026-11-24T17:59:51.367849+08:00,us,content,,,,,，,,,,,
+default,deepseek.sse_at_relay,2,17,1468.223,2026-11-24T17:59:51.367891+08:00,us,content,,,,,位置,,,,,
+default,deepseek.sse_at_relay,2,18,1477.862,2026-11-24T17:59:51.377530+08:00,us,content,,,,,在第,,,,,
+default,deepseek.sse_at_relay,2,19,1477.921,2026-11-24T17:59:51.377589+08:00,us,content,,,,, ,,,,,
+default,deepseek.sse_at_relay,2,20,1477.940,2026-11-24T17:59:51.377608+08:00,us,content,,,,,280,,,,,
+default,deepseek.sse_at_relay,2,21,1477.954,2026-11-24T17:59:51.377622+08:00,us,content,,,,, ,,,,,
+default,deepseek.sse_at_relay,2,22,1477.967,2026-11-24T17:59:51.377635+08:00,us,content,,,,,行,,,,,
+default,deepseek.sse_at_relay,2,23,1477.982,2026-11-24T17:59:51.377650+08:00,us,content,,,,,。,,,,,
+default,deepseek.sse_at_relay,2,24,1490.479,2026-11-24T17:59:51.390147+08:00,us,finish+usage,,,,,,439,23,0,462,stop
+default,deepseek.sse_at_relay,2,25,1490.539,2026-11-24T17:59:51.390207+08:00,us,done,,,,,,,,,,
+default,model.relay,2,,1490.572,2026-11-24T17:59:51.390240+08:00,us,deepseek_http_eof,,,,,,,,,,
+default,loom.sqlite,2,9,1855.332,2026-11-24T17:59:51.755+08:00,ms,model.completed,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,loom.sqlite,,10,1858.332,2026-11-24T17:59:51.758+08:00,ms,run.completed,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+default,client.sse,2,4,1862.044,2026-11-24T17:59:51.761712+08:00,us,text_delta,assistant,,,,T,,,,,
+default,client.sse,2,5,1862.089,2026-11-24T17:59:51.761757+08:00,us,text_delta,assistant,,,,42 的 CI 报告显示：错误码为 E421，位置在第 280 行。,,,,,
+default,client.sse,2,6,1862.103,2026-11-24T17:59:51.761771+08:00,us,attempt_finished,,,,,,,,,,
+default,client.sse,,7,1862.114,2026-11-24T17:59:51.761782+08:00,us,run_end,,,,,,,,,,completed
+default,client.http,,14,1862.132,2026-11-24T17:59:51.761800+08:00,us,stream_eof,,,,,,,,,,
+thinking,loom.sqlite,,1,-0.590,2026-11-24T18:01:50.612+08:00,ms,user_event_insert,user,,,,,,,,,SQLite AFTER INSERT: millisecond precision; may sort just before client send.
+thinking,client.http,,1,0.000,2026-11-24T18:01:50.612590+08:00,us,event_send,user,,,,请调用工具查询 T42 的 CI 报告，用一句中文告诉我错误码和所在行号。,,,,,
+thinking,client.http,,2,3.066,2026-11-24T18:01:50.615656+08:00,us,event_ack,,,,,,,,,,
+thinking,client.http,,3,3.067,2026-11-24T18:01:50.615657+08:00,us,delivery_send,,,,,,,,,,
+thinking,loom.sqlite,,2,3.410,2026-11-24T18:01:50.616+08:00,ms,run.started,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,loom.sqlite,,3,3.410,2026-11-24T18:01:50.616+08:00,ms,delivery.received,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,loom,,,3.921,2026-11-24T18:01:50.616511+08:00,us,run_admitted,,,,,,,,,,
+thinking,client.http,,4,6.127,2026-11-24T18:01:50.618717+08:00,us,delivery_ack,,,,,,,,,,
+thinking,client.http,,5,6.129,2026-11-24T18:01:50.618719+08:00,us,subscribe_send,,,,,,,,,,
+thinking,loom,,,6.146,2026-11-24T18:01:50.618736+08:00,us,worker_claimed,,,,,,,,,,
+thinking,client.http,,6,8.156,2026-11-24T18:01:50.620746+08:00,us,subscribe_headers,,,,,,,,,,200
+thinking,loom.sqlite,1,4,12.410,2026-11-24T18:01:50.625+08:00,ms,model.inference_requested,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,loom,1,,18.057,2026-11-24T18:01:50.630647+08:00,us,model_request_started,,,,,,,,,,input
+thinking,model.relay,1,1,19.417,2026-11-24T18:01:50.632007+08:00,us,request_message_batch_received,system,,,,,,,,,Messages arrived in a single HTTP request body.
+thinking,model.relay,1,2,19.417,2026-11-24T18:01:50.632007+08:00,us,request_message_batch_received,user,,,,,,,,,Messages arrived in a single HTTP request body.
+thinking,model.relay,1,,19.551,2026-11-24T18:01:50.632141+08:00,us,deepseek_request_start,,,,,,,,,,
+thinking,client.sse,1,1,30.954,2026-11-24T18:01:50.643544+08:00,us,attempt_started,,,,,,,,,,
+thinking,model.relay,1,,224.303,2026-11-24T18:01:50.836893+08:00,us,deepseek_response_headers,,,,,,,,,,
+thinking,deepseek.sse_at_relay,1,1,249.093,2026-11-24T18:01:50.861683+08:00,us,role,assistant,,,,,,,,,
+thinking,deepseek.sse_at_relay,1,2,503.650,2026-11-24T18:01:51.116240+08:00,us,reasoning,,3,,,,,,,,
+thinking,loom,1,,503.753,2026-11-24T18:01:51.116343+08:00,us,first_reasoning,,,,,,,,,,
+thinking,deepseek.sse_at_relay,1,3,669.216,2026-11-24T18:01:51.281806+08:00,us,reasoning,,5,,,,,,,,
+thinking,deepseek.sse_at_relay,1,4,683.781,2026-11-24T18:01:51.296371+08:00,us,reasoning,,6,,,,,,,,
+thinking,deepseek.sse_at_relay,1,5,683.857,2026-11-24T18:01:51.296447+08:00,us,reasoning,,3,,,,,,,,
+thinking,deepseek.sse_at_relay,1,6,683.875,2026-11-24T18:01:51.296465+08:00,us,reasoning,,3,,,,,,,,
+thinking,deepseek.sse_at_relay,1,7,683.889,2026-11-24T18:01:51.296479+08:00,us,reasoning,,6,,,,,,,,
+thinking,deepseek.sse_at_relay,1,8,685.763,2026-11-24T18:01:51.298353+08:00,us,reasoning,,4,,,,,,,,
+thinking,deepseek.sse_at_relay,1,9,686.872,2026-11-24T18:01:51.299462+08:00,us,reasoning,,3,,,,,,,,
+thinking,deepseek.sse_at_relay,1,10,686.917,2026-11-24T18:01:51.299507+08:00,us,reasoning,,7,,,,,,,,
+thinking,deepseek.sse_at_relay,1,11,686.937,2026-11-24T18:01:51.299527+08:00,us,reasoning,,4,,,,,,,,
+thinking,deepseek.sse_at_relay,1,12,686.951,2026-11-24T18:01:51.299541+08:00,us,reasoning,,2,,,,,,,,
+thinking,deepseek.sse_at_relay,1,13,687.360,2026-11-24T18:01:51.299950+08:00,us,reasoning,,2,,,,,,,,
+thinking,deepseek.sse_at_relay,1,14,687.410,2026-11-24T18:01:51.300000+08:00,us,reasoning,,1,,,,,,,,
+thinking,deepseek.sse_at_relay,1,15,687.429,2026-11-24T18:01:51.300019+08:00,us,reasoning,,4,,,,,,,,
+thinking,deepseek.sse_at_relay,1,16,752.260,2026-11-24T18:01:51.364850+08:00,us,reasoning,,3,,,,,,,,
+thinking,deepseek.sse_at_relay,1,17,752.381,2026-11-24T18:01:51.364971+08:00,us,reasoning,,5,,,,,,,,
+thinking,deepseek.sse_at_relay,1,18,752.424,2026-11-24T18:01:51.365014+08:00,us,reasoning,,4,,,,,,,,
+thinking,deepseek.sse_at_relay,1,19,752.453,2026-11-24T18:01:51.365043+08:00,us,reasoning,,5,,,,,,,,
+thinking,deepseek.sse_at_relay,1,20,752.481,2026-11-24T18:01:51.365071+08:00,us,reasoning,,1,,,,,,,,
+thinking,deepseek.sse_at_relay,1,21,774.193,2026-11-24T18:01:51.386783+08:00,us,tool_call,,,0,remote_dci_dget_ureport,,,,,,
+thinking,deepseek.sse_at_relay,1,22,802.522,2026-11-24T18:01:51.415112+08:00,us,tool_call,,,2,,,,,,,
+thinking,deepseek.sse_at_relay,1,23,802.593,2026-11-24T18:01:51.415183+08:00,us,tool_call,,,3,,,,,,,
+thinking,deepseek.sse_at_relay,1,24,802.612,2026-11-24T18:01:51.415202+08:00,us,tool_call,,,1,,,,,,,
+thinking,deepseek.sse_at_relay,1,25,804.805,2026-11-24T18:01:51.417395+08:00,us,tool_call,,,3,,,,,,,
+thinking,deepseek.sse_at_relay,1,26,804.853,2026-11-24T18:01:51.417443+08:00,us,tool_call,,,1,,,,,,,
+thinking,deepseek.sse_at_relay,1,27,804.870,2026-11-24T18:01:51.417460+08:00,us,tool_call,,,2,,,,,,,
+thinking,deepseek.sse_at_relay,1,28,804.884,2026-11-24T18:01:51.417474+08:00,us,tool_call,,,1,,,,,,,
+thinking,deepseek.sse_at_relay,1,29,813.150,2026-11-24T18:01:51.425740+08:00,us,tool_call,,,1,,,,,,,
+thinking,deepseek.sse_at_relay,1,30,822.195,2026-11-24T18:01:51.434785+08:00,us,finish+usage,,,,,,354,64,19,418,tool_calls
+thinking,deepseek.sse_at_relay,1,31,822.271,2026-11-24T18:01:51.434861+08:00,us,done,,,,,,,,,,
+thinking,model.relay,1,,822.533,2026-11-24T18:01:51.435123+08:00,us,deepseek_http_eof,,,,,,,,,,
+thinking,loom.sqlite,1,5,824.410,2026-11-24T18:01:51.437+08:00,ms,model.completed,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,loom.sqlite,1,6,826.410,2026-11-24T18:01:51.439+08:00,ms,tool.call_requested,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,client.sse,1,2,839.952,2026-11-24T18:01:51.452542+08:00,us,attempt_finished,,,,,,,,,,
+thinking,loom.sqlite,1,7,847.410,2026-11-24T18:01:51.460+08:00,ms,tool.result_received,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,mcp.server,1,,848.129,2026-11-24T18:01:51.460719+08:00,us,tools/call_received,,,,get_report,,,,,,T42
+thinking,mcp.server,1,,848.194,2026-11-24T18:01:51.460784+08:00,us,tools/call_response_send,tool,,,get_report,"T42 failed: error E421, line 280.",,,,,
+thinking,loom.sqlite,2,8,858.410,2026-11-24T18:01:51.471+08:00,ms,model.inference_requested,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,loom,2,,863.083,2026-11-24T18:01:51.475673+08:00,us,model_request_started,,,,,,,,,,tool_result
+thinking,client.sse,2,3,863.330,2026-11-24T18:01:51.475920+08:00,us,attempt_started,,,,,,,,,,
+thinking,model.relay,2,1,863.461,2026-11-24T18:01:51.476051+08:00,us,request_message_batch_received,system,,,,,,,,,Messages arrived in a single HTTP request body.
+thinking,model.relay,2,2,863.461,2026-11-24T18:01:51.476051+08:00,us,request_message_batch_received,user,,,,,,,,,Messages arrived in a single HTTP request body.
+thinking,model.relay,2,3,863.461,2026-11-24T18:01:51.476051+08:00,us,request_message_batch_received,assistant,,,,,,,,,Messages arrived in a single HTTP request body.
+thinking,model.relay,2,4,863.461,2026-11-24T18:01:51.476051+08:00,us,request_message_batch_received,tool,,,,,,,,,Messages arrived in a single HTTP request body.
+thinking,model.relay,2,,863.520,2026-11-24T18:01:51.476110+08:00,us,deepseek_request_start,,,,,,,,,,
+thinking,model.relay,2,,960.349,2026-11-24T18:01:51.572939+08:00,us,deepseek_response_headers,,,,,,,,,,
+thinking,deepseek.sse_at_relay,2,1,993.867,2026-11-24T18:01:51.606457+08:00,us,role,assistant,,,,,,,,,
+thinking,deepseek.sse_at_relay,2,2,2414.338,2026-11-24T18:01:53.026928+08:00,us,content,,,,,T,,,,,
+thinking,loom,2,,2414.429,2026-11-24T18:01:53.027019+08:00,us,first_content,,,,,,,,,,
+thinking,deepseek.sse_at_relay,2,3,2416.860,2026-11-24T18:01:53.029450+08:00,us,content,,,,,42,,,,,
+thinking,deepseek.sse_at_relay,2,4,2416.905,2026-11-24T18:01:53.029495+08:00,us,content,,,,, ,,,,,
+thinking,deepseek.sse_at_relay,2,5,2416.933,2026-11-24T18:01:53.029523+08:00,us,content,,,,,的,,,,,
+thinking,client.sse,2,4,2425.629,2026-11-24T18:01:53.038219+08:00,us,text_delta,assistant,,,,T,,,,,
+thinking,deepseek.sse_at_relay,2,6,2441.939,2026-11-24T18:01:53.054529+08:00,us,content,,,,, CI,,,,,
+thinking,deepseek.sse_at_relay,2,7,2441.990,2026-11-24T18:01:53.054580+08:00,us,content,,,,, ,,,,,
+thinking,deepseek.sse_at_relay,2,8,2442.007,2026-11-24T18:01:53.054597+08:00,us,content,,,,,报告,,,,,
+thinking,deepseek.sse_at_relay,2,9,2442.027,2026-11-24T18:01:53.054617+08:00,us,content,,,,,显示,,,,,
+thinking,deepseek.sse_at_relay,2,10,2442.042,2026-11-24T18:01:53.054632+08:00,us,content,,,,,错误,,,,,
+thinking,deepseek.sse_at_relay,2,11,2442.057,2026-11-24T18:01:53.054647+08:00,us,content,,,,,码,,,,,
+thinking,deepseek.sse_at_relay,2,12,2442.073,2026-11-24T18:01:53.054663+08:00,us,content,,,,,为,,,,,
+thinking,deepseek.sse_at_relay,2,13,2442.086,2026-11-24T18:01:53.054676+08:00,us,content,,,,, E,,,,,
+thinking,deepseek.sse_at_relay,2,14,2442.101,2026-11-24T18:01:53.054691+08:00,us,content,,,,,421,,,,,
+thinking,deepseek.sse_at_relay,2,15,2442.113,2026-11-24T18:01:53.054703+08:00,us,content,,,,,，,,,,,
+thinking,deepseek.sse_at_relay,2,16,2442.130,2026-11-24T18:01:53.054720+08:00,us,content,,,,,出现在,,,,,
+thinking,deepseek.sse_at_relay,2,17,2445.815,2026-11-24T18:01:53.058405+08:00,us,content,,,,,第,,,,,
+thinking,deepseek.sse_at_relay,2,18,2445.866,2026-11-24T18:01:53.058456+08:00,us,content,,,,, ,,,,,
+thinking,deepseek.sse_at_relay,2,19,2445.886,2026-11-24T18:01:53.058476+08:00,us,content,,,,,280,,,,,
+thinking,deepseek.sse_at_relay,2,20,2445.901,2026-11-24T18:01:53.058491+08:00,us,content,,,,, ,,,,,
+thinking,deepseek.sse_at_relay,2,21,2445.930,2026-11-24T18:01:53.058520+08:00,us,content,,,,,行,,,,,
+thinking,deepseek.sse_at_relay,2,22,2445.945,2026-11-24T18:01:53.058535+08:00,us,content,,,,,。,,,,,
+thinking,deepseek.sse_at_relay,2,23,2450.544,2026-11-24T18:01:53.063134+08:00,us,finish+usage,,,,,,458,22,0,480,stop
+thinking,deepseek.sse_at_relay,2,24,2450.593,2026-11-24T18:01:53.063183+08:00,us,done,,,,,,,,,,
+thinking,model.relay,2,,2451.295,2026-11-24T18:01:53.063885+08:00,us,deepseek_http_eof,,,,,,,,,,
+thinking,loom.sqlite,2,9,2452.410,2026-11-24T18:01:53.065+08:00,ms,model.completed,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,loom.sqlite,,10,2455.410,2026-11-24T18:01:53.068+08:00,ms,run.completed,,,,,,,,,,SQLite AFTER INSERT inside transaction.
+thinking,client.sse,2,5,2458.677,2026-11-24T18:01:53.071267+08:00,us,text_delta,assistant,,,,42 的 CI 报告显示错误码为 E421，出现在第 280 行。,,,,,
+thinking,client.sse,2,6,2458.700,2026-11-24T18:01:53.071290+08:00,us,attempt_finished,,,,,,,,,,
+thinking,client.sse,,7,2458.711,2026-11-24T18:01:53.071301+08:00,us,run_end,,,,,,,,,,completed
+thinking,client.http,,14,2458.723,2026-11-24T18:01:53.071313+08:00,us,stream_eof,,,,,,,,,,
