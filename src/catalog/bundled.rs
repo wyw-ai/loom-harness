@@ -3,7 +3,7 @@ use rusqlite::TransactionBehavior;
 
 const WEBUI_MANIFEST: &str = include_str!("bundled/webui/plugin.yaml");
 const WEBUI_ENTRYPOINT: &str = include_str!("bundled/webui/plugin.lua");
-const WEBUI_VERSION: &str = "1.1.0";
+const WEBUI_VERSION: &str = "1.2.0";
 const WEBUI_ASSETS: &[(&str, &str, &str)] = &[
     (
         "index.html",
@@ -24,6 +24,26 @@ const WEBUI_ASSETS: &[(&str, &str, &str)] = &[
         "desk.js",
         "text/javascript; charset=utf-8",
         include_str!("bundled/webui/desk.js"),
+    ),
+    (
+        "shell.js",
+        "text/javascript; charset=utf-8",
+        include_str!("bundled/webui/shell.js"),
+    ),
+    (
+        "richtext.js",
+        "text/javascript; charset=utf-8",
+        include_str!("bundled/webui/richtext.js"),
+    ),
+    (
+        "chat-flow.css",
+        "text/css; charset=utf-8",
+        include_str!("bundled/webui/chat-flow.css"),
+    ),
+    (
+        "desk-workspace.css",
+        "text/css; charset=utf-8",
+        include_str!("bundled/webui/desk-workspace.css"),
     ),
 ];
 
@@ -124,16 +144,21 @@ impl Catalog {
         let Ok(mut instance) = serde_yaml::from_str::<Value>(&self.file(path)?) else {
             return Ok(());
         };
-        if instance["id"] != "webui"
-            || instance["package"] != "webui"
-            || instance["version"] != "1.0.0"
-        {
+        if instance["id"] != "webui" || instance["package"] != "webui" {
             return Ok(());
         }
-        let legacy = self.home.join("packages/webui/1.0.0");
+        let (version, assets) = match instance["version"].as_str() {
+            Some("1.0.0") => ("1.0.0", json!(["index.html", "app.css", "app.js"])),
+            Some("1.1.0") => (
+                "1.1.0",
+                json!(["index.html", "app.css", "app.js", "desk.js"]),
+            ),
+            _ => return Ok(()),
+        };
+        let legacy = self.home.join("packages/webui").join(version);
         let mut expected = serde_yaml::from_str::<Value>(WEBUI_MANIFEST).map_err(err)?;
-        expected["version"] = json!("1.0.0");
-        expected["webui"]["assets"] = json!(["index.html", "app.css", "app.js"]);
+        expected["version"] = json!(version);
+        expected["webui"]["assets"] = assets;
         if self
             .file(&legacy.join("plugin.yaml"))
             .ok()
@@ -297,29 +322,37 @@ mod tests {
 
     #[test]
     fn official_webui_upgrade_preserves_disabled_instances_and_owner_scope() {
-        let home = tempfile::tempdir().unwrap();
-        let legacy = home.path().join("packages/webui/1.0.0");
-        let mut manifest: Value = serde_yaml::from_str(WEBUI_MANIFEST).unwrap();
-        manifest["version"] = json!("1.0.0");
-        manifest["webui"]["assets"] = json!(["index.html", "app.css", "app.js"]);
-        store::write(
-            &legacy.join("plugin.yaml"),
-            serde_yaml::to_string(&manifest).unwrap().as_bytes(),
-        )
-        .unwrap();
-        store::write(&legacy.join("plugin.lua"), WEBUI_ENTRYPOINT.as_bytes()).unwrap();
-        let instance = json!({"id":"webui","package":"webui","version":"1.0.0","enabled":false,"allowed_owners":["qa"]});
-        store::write(
-            &home.path().join("plugins/webui/instance.yaml"),
-            instance.to_string().as_bytes(),
-        )
-        .unwrap();
-        let catalog = Catalog::open(home.path()).unwrap();
-        let selected = catalog.get("plugin", "webui").unwrap();
-        assert_eq!(selected["version"], WEBUI_VERSION);
-        assert_eq!(selected["enabled"], false);
-        assert_eq!(selected["allowed_owners"], instance["allowed_owners"]);
-        assert!(catalog.webui_asset("desk.js").unwrap().is_none());
+        for (version, assets) in [
+            ("1.0.0", json!(["index.html", "app.css", "app.js"])),
+            (
+                "1.1.0",
+                json!(["index.html", "app.css", "app.js", "desk.js"]),
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let legacy = home.path().join("packages/webui").join(version);
+            let mut manifest: Value = serde_yaml::from_str(WEBUI_MANIFEST).unwrap();
+            manifest["version"] = json!(version);
+            manifest["webui"]["assets"] = assets;
+            store::write(
+                &legacy.join("plugin.yaml"),
+                serde_yaml::to_string(&manifest).unwrap().as_bytes(),
+            )
+            .unwrap();
+            store::write(&legacy.join("plugin.lua"), WEBUI_ENTRYPOINT.as_bytes()).unwrap();
+            let instance = json!({"id":"webui","package":"webui","version":version,"enabled":false,"allowed_owners":["qa"]});
+            store::write(
+                &home.path().join("plugins/webui/instance.yaml"),
+                instance.to_string().as_bytes(),
+            )
+            .unwrap();
+            let catalog = Catalog::open(home.path()).unwrap();
+            let selected = catalog.get("plugin", "webui").unwrap();
+            assert_eq!(selected["version"], WEBUI_VERSION);
+            assert_eq!(selected["enabled"], false);
+            assert_eq!(selected["allowed_owners"], instance["allowed_owners"]);
+            assert!(catalog.webui_asset("desk.js").unwrap().is_none());
+        }
     }
 
     #[test]

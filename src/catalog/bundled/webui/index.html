@@ -3,9 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#faf9fb">
+  <meta name="theme-color" content="#fafaf7">
   <title>Loom 工作台</title>
   <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="chat-flow.css">
+  <link rel="stylesheet" href="desk-workspace.css">
+  <script src="richtext.js" defer></script>
+  <script src="shell.js" defer></script>
   <script src="desk.js" defer></script>
   <script src="app.js" defer></script>
 </head>
@@ -15,14 +19,20 @@
     <aside id="sidebar" aria-label="工作台导航">
       <div class="brand">
         <span class="loom-mark" aria-hidden="true"></span>
-        <span>Loom</span>
+        <span class="brand-word">Loom</span>
+        <button id="sidebar-fold" class="icon-button" type="button" title="收起侧栏" aria-label="收起侧栏"><span class="icon icon-menu" aria-hidden="true"></span></button>
         <button id="sidebar-close" class="icon-button" type="button" aria-label="关闭会话导航">
           <span class="icon icon-close" aria-hidden="true"></span>
         </button>
       </div>
-      <button id="new-session" type="button">
-        <span class="icon icon-plus" aria-hidden="true"></span>新建会话
-      </button>
+      <div class="side-actions">
+        <button id="new-session" type="button"><span class="icon icon-plus" aria-hidden="true"></span>新建会话</button>
+        <button id="quick-open" type="button" title="搜索会话、工具和操作" aria-label="搜索会话、工具和操作"><span class="icon icon-search" aria-hidden="true"></span>搜索<kbd>Ctrl K</kbd></button>
+      </div>
+      <div class="nav-switch" role="group" aria-label="侧栏视图">
+        <button type="button" id="nav-chats" aria-pressed="true">会话</button>
+        <button type="button" id="nav-workspace" aria-pressed="false">工作台</button>
+      </div>
       <nav id="desk-nav" aria-label="管理与追踪"></nav>
       <div class="agent-picker">
         <label class="section-label" for="agent-select">当前 Agent</label>
@@ -37,6 +47,12 @@
         <h2 id="history-label" class="section-label">最近会话</h2>
         <ul id="session-list"></ul>
       </nav>
+      <div class="sidebar-footer">
+        <button id="connection-button" type="button" aria-haspopup="dialog">
+          <span class="account-avatar" aria-hidden="true"><span class="icon icon-account"></span></span>
+          <span id="connection-state">连接账户</span><span class="account-more" aria-hidden="true">···</span>
+        </button>
+      </div>
     </aside>
     <button id="sidebar-scrim" type="button" aria-label="关闭导航" tabindex="-1"></button>
     <main>
@@ -44,14 +60,10 @@
         <button id="sidebar-toggle" class="icon-button" type="button" aria-label="会话导航" aria-expanded="false" aria-controls="sidebar">
           <span class="icon icon-menu" aria-hidden="true"></span>
         </button>
-        <span class="icon icon-thread" aria-hidden="true"></span>
+        <button id="sidebar-show" class="icon-button" type="button" title="展开侧栏" aria-label="展开侧栏"><span class="icon icon-menu" aria-hidden="true"></span></button>
         <h1 id="thread-title">新会话</h1>
         <span id="desk-title" class="desk-bar-title"></span>
         <button id="session-details" class="desk-button" hidden type="button">会话详情</button>
-        <button id="connection-button" type="button" aria-haspopup="dialog">
-          <span class="icon icon-account" aria-hidden="true"></span>
-          <span id="connection-state">连接账户</span>
-        </button>
       </header>
       <section id="desk-panel" aria-labelledby="desk-heading" hidden>
         <div class="desk-inner">
@@ -71,7 +83,6 @@
           <h2 id="empty-title">想一起处理什么？</h2>
           <p id="empty-description">给 Agent 发一条消息，开始这段对话。</p>
           <button id="empty-action" type="button">连接账户</button>
-          <div id="capability-prompts" aria-label="对话建议" hidden></div>
         </div>
         <div id="messages" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions"></div>
       </div>
@@ -80,7 +91,7 @@
         <button id="suggested-draft" class="capability-prompt" type="button" hidden></button>
         <form id="composer">
           <label class="visually-hidden" for="prompt">消息</label>
-          <textarea id="prompt" name="message" rows="2" placeholder="给 Agent 发消息…" aria-describedby="send-hint"></textarea>
+          <textarea id="prompt" name="message" rows="2" placeholder="发消息，输入 / 选操作，@ 选工具…" aria-describedby="send-hint"></textarea>
           <div id="compose-chips"></div>
           <div class="composer-actions">
             <div class="composer-tools">
@@ -95,10 +106,18 @@
             </button>
           </div>
         </form>
+        <div id="capability-prompts" aria-label="对话建议" hidden></div>
       </div>
     </main>
   </div>
   <dialog id="desk-dialog"><form id="desk-form"></form></dialog>
+  <dialog id="quick-dialog" aria-label="搜索会话、工具和操作">
+    <div class="quick-input"><span class="icon icon-search" aria-hidden="true"></span>
+      <input type="search" id="quick-query" aria-label="搜索" autocomplete="off" placeholder="搜索会话、Agent、工具或操作…">
+      <button id="quick-close" type="button" aria-label="关闭搜索">Esc</button>
+    </div>
+    <div id="quick-results" aria-label="搜索结果"></div>
+  </dialog>
   <dialog id="credential-dialog" aria-labelledby="credential-title" aria-describedby="credential-description">
     <form id="credential-form">
       <div class="dialog-heading">

@@ -316,6 +316,9 @@ async fn route(
         }
         ("GET", ["events"] | ["runs"] | ["sessions"]) => {
             let mut v = match (p[0], q.get("system_prompt_event_id")) {
+                ("sessions", _) if q.get("include").is_some_and(|value| value == "preview") => {
+                    db.sessions_with_previews(o, q.get("agent_id").map(String::as_str))?
+                }
                 ("runs", Some(id)) => db.runs_for_prompt(o, id)?,
                 _ => db.list(o, p[0], None)?,
             };

@@ -17,6 +17,8 @@ from harness import Instance
 def model(payload):
     messages = payload["messages"]
     text = json.dumps(messages, ensure_ascii=False)
+    if any(m["role"] == "user" and m.get("content") == "测试表格渲染" for m in messages):
+        return answer("| 步骤 | 产物 |\n| --- | --- |\n| 复核 | **记录** |\n\n```txt\n<b>原文</b>\n```")
     if "Suggest one short next message" in text:
         return answer("再检查一次记录")
     if not any(m["role"] == "tool" for m in messages):
@@ -52,6 +54,20 @@ def run():
             "images": True,
         }
         with Instance({"LOOM_MODEL_ROUTES": json.dumps({"fixture": route})}) as app:
+            app.api("POST", "plugins/inspection/versions", {
+                "version": "1",
+                "code": """return function(loom)
+                    loom.register_tool({id='status', description='Read system status',
+                        webui={suggestion={label='  查看 <em>状态</em>  ',
+                            prompt='  请列出 <strong>当前状态</strong>。  '}},
+                        handler=function() return 'ready' end})
+                    loom.register_toolset({id='system', members={'status'}})
+                end""",
+            }, token="admin-token")
+            app.api("POST", "plugins", {
+                "id": "inspection", "package": "inspection", "version": "1",
+                "enabled": True, "allowed_agents": ["desktop"],
+            }, token="admin-token")
             app.api(
                 "POST",
                 "catalog/tools",
@@ -73,7 +89,7 @@ def run():
                     "id": "desktop",
                     "name": "工作助手",
                     "model": "fixture",
-                    "tools": [{"toolset": "loom.daily"}, {"tool": "home.audit"}],
+                    "tools": [{"toolset": "loom.daily"}, {"tool": "home.audit"}, {"toolset": "inspection.system"}],
                 },
             )
             app.api(

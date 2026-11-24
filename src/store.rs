@@ -154,6 +154,27 @@ fn fetch_many(c: &Connection, sql: &str, args: impl rusqlite::Params) -> Result<
     }
     Ok(docs)
 }
+fn user_preview(content: &Value) -> Option<String> {
+    let text_parts = content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|part| part["type"] == "text")
+        .filter_map(|part| part["text"].as_str());
+    let mut preview: String = content
+        .as_str()
+        .into_iter()
+        .chain(text_parts)
+        .flat_map(str::split_whitespace)
+        .flat_map(|word| std::iter::once(' ').chain(word.chars()))
+        .skip(1)
+        .take(48)
+        .collect();
+    if preview.ends_with(' ') {
+        preview.pop();
+    }
+    (!preview.is_empty()).then_some(preview)
+}
 fn append_history(
     c: &Connection,
     owner: &str,
@@ -231,6 +252,7 @@ impl Store {
         c.execute_batch("
             CREATE TABLE IF NOT EXISTS history(seq INTEGER PRIMARY KEY,owner TEXT NOT NULL,session TEXT NOT NULL,
               origin TEXT NOT NULL,doc TEXT NOT NULL,UNIQUE(owner,session,origin));
+            CREATE INDEX IF NOT EXISTS history_session_order ON history(owner,session,seq);
             CREATE TABLE IF NOT EXISTS workq(seq INTEGER PRIMARY KEY,run_id TEXT NOT NULL UNIQUE,owner TEXT NOT NULL,
               ready INTEGER NOT NULL DEFAULT 1,token TEXT,worker TEXT,expires INTEGER);
             CREATE INDEX IF NOT EXISTS work_ready ON workq(ready,expires,seq);
@@ -318,6 +340,37 @@ impl Store {
                     params![owner, k],
                 )?,
             }))
+        })
+    }
+    pub fn sessions_with_previews(&self, owner: &str, agent_id: Option<&str>) -> Result<Value> {
+        self.read(|c| {
+            let mut sessions = c.prepare(
+                "SELECT doc FROM objects WHERE owner=?1 AND kind='session'
+                 AND (?2 IS NULL OR json_extract(doc,'$.agent_id')=?2) ORDER BY seq"
+            )?;
+            let mut user_items = c.prepare(
+                "SELECT doc -> '$.content' FROM history WHERE owner=?1 AND session=?2
+                 AND json_extract(doc,'$.role')='user'
+                 AND coalesce(json_extract(doc,'$.event.source'),json_extract(doc,'$.event.source_id'),'user')='user'
+                 AND json_type(doc,'$.content') IN ('text','array') ORDER BY seq"
+            )?;
+            let mut rows = sessions.query(params![owner, agent_id])?;
+            let mut result = Vec::new();
+            while let Some(row) = rows.next()? {
+                let mut session: Value = serde_json::from_str(&row.get::<_, String>(0)?)?;
+                if session["title"].as_str().is_none_or(|title| title.trim().is_empty()) {
+                    let mut items = user_items.query(params![owner, field(&session, "id")?])?;
+                    while let Some(item) = items.next()? {
+                        let content = serde_json::from_str(&item.get::<_, String>(0)?)?;
+                        if let Some(preview) = user_preview(&content) {
+                            session["first_user_preview"] = json!(preview);
+                            break;
+                        }
+                    }
+                }
+                result.push(session);
+            }
+            Ok(Value::Array(result))
         })
     }
     pub fn history(&self, owner: &str, sid: &str) -> Result<Value> {

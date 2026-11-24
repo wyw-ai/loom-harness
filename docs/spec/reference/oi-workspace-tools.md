@@ -31,7 +31,9 @@ grants:
 
 包的声明及入口位于 `packages/internal-tools/1.0.0/plugin.yaml` 和 `plugin.lua`。启用实例后，宿主默认每 30 秒同步。目录身份用于枚举 Service。读取工具签名和执行调用优先取 `service_credentials[service_id]`，其余 Service 使用 `consumer_credential_ref`。上例中的引用 `oi-directory` 从宿主环境变量 `LOOM_MCP_CREDENTIAL_OI_DIRECTORY` 解析。请给执行同步与调用的进程配置相应环境变量。
 
-管理员可通过 `POST /api/plugins` 创建实例，`PATCH /api/settings/oi-office` 写入上述设置。也可在工作台的「插件」中完成两步。用 `POST /api/plugins/oi-office/refresh` 立即同步，用 `GET /api/plugins/oi-office/discovery` 检查每个 Service 的 `ready`、成员、错误及 Agent 命名冲突。进入「工具目录 → 工具集」查看集合，在 Agent 详情的「绑定工具」选择它。管理员在 Agent 的「编辑 Agent → 授权范围」设置上述 grants。
+管理员打开「工作台 → OI 连接」，点击「连接 Loom OI」。也可按 Ctrl K 搜索「接入 OI」。表单接收实例名、OIS 地址、目录 Service 和凭据引用。保存后立即刷新，页面按 Service 列出状态、实际工具及使用它的 Agent。点击「连接到 Agent」时，网页按 Agent 当前修订一次保存授权与工具集绑定。已绑定的 Agent 可以直接打开对话，编辑示例草稿后发送。
+
+同一流程的 API 是 `POST /api/plugins` 创建实例，`PATCH /api/settings/oi-office` 保存设置，`POST /api/plugins/oi-office/refresh` 发起同步，再通过 `GET /api/plugins/oi-office/discovery` 读取各 Service 的 `ready`、成员、错误及 Agent 命名冲突。绑定使用既有的 Agent PATCH，同时更新上例中的授权和工具集选择。Agent 详情也能核对结果。
 
 ## 通过 API 验证一次工具调用
 

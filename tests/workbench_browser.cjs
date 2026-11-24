@@ -6,7 +6,10 @@ const base = process.env.LOOM_BROWSER_BASE;
 const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV90AAAAASUVORK5CYII=';
 
 const button = (p, name) => p.getByRole('button', { name, exact: true });
-const nav = (p, id) => p.locator('#desk-nav [data-section="' + id + '"]').click();
+const nav = async (p, id) => {
+  if (!(await p.locator('#desk-nav').isVisible())) await p.locator('#nav-workspace').click();
+  await p.locator('#desk-nav [data-section="' + id + '"]').click();
+};
 const row = (p, text) => p.locator('#desk-content button.desk-row').filter({ hasText: text });
 const field = (p, name) => p.locator('#desk-form [name="' + name + '"]');
 
@@ -22,7 +25,7 @@ async function login(p, token) {
   await p.locator('#token-input').fill(token);
   await p.locator('#credential-save').click();
   await p.locator('#credential-dialog').waitFor({ state: 'hidden' });
-  await p.locator('#desk-nav [data-section=runs]').waitFor();
+  await p.locator('#desk-nav [data-section=runs]').waitFor({state:'attached'});
 }
 
 async function submit(p, name = '保存') {
@@ -52,13 +55,93 @@ async function waitRun(id, status) {
   assert.fail('Run ' + id + ' did not reach ' + status);
 }
 
+async function pluginSuggestion(p) {
+  const suggestion = {label: '查看 <em>状态</em>', prompt: '请列出 <strong>当前状态</strong>。'};
+  const tools = await read('agents/desktop/tools','user-token');
+  assert.deepEqual(tools.find(t => t.id === 'inspection.status').webui.suggestion,suggestion);
+  const reader = await read('agents/author/tools','user-token');
+  assert.ok(reader.every(t => t.id !== 'inspection.status'));
+  await p.locator('#agent-select').selectOption('author');
+  await p.locator('#new-session:not(:disabled)').waitFor();
+  assert.equal(await button(p, suggestion.label).count(),0);
+  await p.locator('#agent-select').selectOption('desktop');
+  const card = button(p, suggestion.label);
+  await card.waitFor();
+  assert.equal(await card.textContent(),suggestion.label);
+  assert.equal(await card.locator('*').count(),0);
+  const before = await read('events', 'user-token');
+  await card.click();
+  await p.waitForFunction(text => document.querySelector('#prompt').value === text,suggestion.prompt);
+  assert.deepEqual(await read('events', 'user-token'),before);
+  const disabled = await p.request.patch(base + '/api/plugins/inspection',{
+    headers: {Authorization:'Bearer admin-token'},data:{enabled:false},
+  });
+  assert.ok(disabled.ok());
+  await p.locator('#prompt').fill('');
+  await card.click();
+  await p.getByText('可用工具已更新，请重新选择。',{exact:true}).waitFor();
+  assert.equal(await card.count(),0);
+  assert.equal(await p.locator('#prompt').inputValue(),'');
+}
+
+async function keyboardAndRendering(p) {
+  await p.locator('#agent-select').selectOption('desktop');
+  await p.locator('#new-session').click();
+  const prompt = p.locator('#prompt');
+  await prompt.fill('@home.au');
+  await p.locator('#compose-picker [role=option]').filter({hasText:'home.audit'}).waitFor();
+  await prompt.press('Enter');
+  assert.equal(await prompt.inputValue(), 'home.audit ');
+  await prompt.fill('/目标');
+  await prompt.press('Enter');
+  assert.equal(await p.locator('#goal-toggle').getAttribute('aria-pressed'), 'true');
+  await p.locator('#goal-toggle').click();
+  await p.keyboard.press('Control+k');
+  await p.locator('#quick-query').fill('接入 OI');
+  await p.locator('#quick-query').press('Enter');
+  await p.getByRole('button', {name:'连接 Loom OI', exact:true}).waitFor();
+  await p.locator('#desk-chat').click();
+  const job=await send(p,'测试表格渲染');
+  const firstRun = await waitRun(job.run_id,'completed');
+  await p.locator('.message-assistant td strong').getByText('记录',{exact:true}).waitFor();
+  assert.equal(await p.locator('.md-code pre code').textContent(),'<b>原文</b>');
+  assert.equal(await p.locator('.md-code pre b').count(),0);
+  const answer = p.locator('.message-assistant').first();
+  const initial = await read('sessions/' + firstRun.session_id + '/context/items');
+  const later = await send(p, '继续本轮验收');
+  await waitRun(later.run_id, 'completed');
+  await p.locator('.message-assistant').nth(1).waitFor();
+  const inspected = p.waitForResponse(r => r.url().endsWith('/api/runs/' + job.run_id));
+  await button(answer, '查看本轮').click();
+  assert.equal((await (await inspected).json()).id, job.run_id);
+  await p.locator('#desk-content .desk-facts').waitFor();
+  await p.locator('#desk-chat').click();
+  const created = p.waitForResponse(r => r.request().method()==='POST' && r.url().endsWith('/branches'));
+  await button(answer,'从此处分支').click();
+  const branch = await (await created).json();
+  assert.equal(branch.parent_session_id, firstRun.session_id);
+  assert.deepEqual(await read('sessions/' + branch.id + '/context/items'), initial);
+}
+
 async function catalog(p) {
   await nav(p, 'tools');
   await button(p, '创建独立工具').click();
   await field(p, 'id').fill('browser-check');
   await field(p, 'description').fill('浏览器测试');
   await field(p, 'code').fill('return function(ctx,args) return true end');
+  await p.locator('#desk-form summary').filter({hasText: '输入框建议'}).click();
+  await field(p, 'suggestion_label').fill('查看工作状态');
+  await field(p, 'suggestion_prompt').fill('请检查当前工作状态。');
   await submit(p);
+  let entry = (await read('catalog/tools')).find((t) => t.id === 'home.browser-check');
+  assert.deepEqual(entry.webui.suggestion, {label: '查看工作状态', prompt: '请检查当前工作状态。'});
+  await button(p, '编辑工具').click();
+  await p.locator('#desk-form summary').filter({hasText: '输入框建议'}).click();
+  await field(p, 'suggestion_label').fill('');
+  await field(p, 'suggestion_prompt').fill('');
+  await submit(p);
+  entry = (await read('catalog/tools')).find((t) => t.id === 'home.browser-check');
+  assert.equal(entry.webui?.suggestion, undefined);
   await button(p, '工具集').click();
   await button(p, '创建工具集').click();
   await field(p, 'id').fill('browser-set');
@@ -68,18 +151,21 @@ async function catalog(p) {
   assert.deepEqual(sets.find((s) => s.id === 'home.browser-set').members, ['home.browser-check']);
 
   await nav(p, 'plugins');
-  await row(p, 'internal-tools').click();
-  assert.equal(await field(p, 'package').inputValue(), 'internal-tools');
-  assert.ok(await field(p, 'version').inputValue());
-  await field(p, 'id').fill('test-office');
-  await submit(p);
-  await button(p, '编辑设置').click();
+  await button(p, '连接 Loom OI').click();
+  await field(p, 'instance').fill('test-office');
   await field(p, 'base_url').fill('http://127.0.0.1:9');
   await field(p, 'catalog_service').fill('catalog');
   await field(p, 'catalog_credential_ref').fill('test-catalog');
-  await field(p, 'consumer_credential_ref').fill('test-consumer');
-  await submit(p);
+  await button(p.locator('#desk-dialog'), '连接并发现服务').click();
+  await p.locator('.desk-form-error').filter({hasText: /请设置默认调用凭据/}).waitFor();
+  await button(p, '添加专用凭据').click();
+  await p.getByLabel('Service 名称', {exact: true}).fill('sample');
+  await p.getByLabel('凭据引用', {exact: true}).fill('test-consumer');
+  await submit(p, '连接并发现服务');
+  await p.locator('.oi-notice').filter({hasText: /LOOM_MCP_CREDENTIAL_TEST_CATALOG|暂时无法连接 OIS/}).waitFor();
   assert.equal((await read('settings/test-office')).catalog_service, 'catalog');
+  assert.deepEqual((await read('settings/test-office')).service_credentials, {sample: 'test-consumer'});
+  assert.equal((await read('plugins/test-office')).enabled, true);
 
   await nav(p, 'dispatches');
   await button(p, '创建调度').click();
@@ -213,7 +299,12 @@ async function approvalAndGoal(p) {
     p.setDefaultTimeout(12000);
     const errors = [];
     p.on('pageerror', (err) => errors.push(err.message));
+    await login(p, 'user-token');
+    await pluginSuggestion(p);
+    console.log('PASS Lua plugin Toolset exposes a plain-text draft only to the authorized Agent and expires on disable');
     await login(p, 'admin-token');
+    await keyboardAndRendering(p);
+    console.log('PASS keyboard navigation, scoped tools, slash actions and Markdown');
     await catalog(p);
     console.log('PASS catalog, installed packages, scheduling, HOME');
     await creator(p);

@@ -9,6 +9,7 @@ window.createLoomDesk = function createLoomDesk(client) {
   const label = {
     agents: 'Agent',
     plugins: '插件',
+    oi: 'OI 连接',
     tools: '工具目录',
     sets: '工具集',
     connections: '连接',
@@ -26,6 +27,7 @@ window.createLoomDesk = function createLoomDesk(client) {
   const symbol = {
     agents: '◉',
     plugins: '⊞',
+    oi: '⇄',
     tools: '⌘',
     runs: '▷',
     events: '≋',
@@ -199,7 +201,7 @@ window.createLoomDesk = function createLoomDesk(client) {
     nav.replaceChildren();
     const sections = [
       'agents',
-      ...(id.admin ? ['plugins'] : []),
+      ...(id.admin ? ['plugins', 'oi'] : []),
       'tools',
       'runs',
       'events',
@@ -218,6 +220,40 @@ window.createLoomDesk = function createLoomDesk(client) {
   function field(name, title, value = '', type = 'text', options = {}) {
     return { name, title, value, type, ...options };
   }
+  function credentialPairs(value) {
+    const box = node('div', 'oi-credential-pairs');
+    const rows = node('div', 'oi-credential-rows');
+    const addRow = (service = '', ref = '') => {
+      const row = node('div', 'oi-credential-row');
+      const name = node('input');
+      name.placeholder = 'Service 名称';
+      name.setAttribute('aria-label', 'Service 名称');
+      name.value = service;
+      const credential = node('input');
+      credential.placeholder = '凭据引用';
+      credential.setAttribute('aria-label', '凭据引用');
+      credential.value = ref;
+      row.append(name, credential, button('移除', () => row.remove(), 'desk-link'));
+      rows.append(row);
+      return name;
+    };
+    Object.entries(value || {}).forEach(([service, ref]) => addRow(service, ref));
+    box.append(rows, button('添加专用凭据', () => addRow().focus(), 'desk-link'));
+    return {
+      element: box,
+      read() {
+        const pairs = Object.create(null);
+        for (const row of rows.children) {
+          const [service, credential] = Array.from(row.querySelectorAll('input'), i => i.value.trim());
+          if (!service && !credential) continue;
+          if (!service || !credential) throw Error('请补全 Service 名称和凭据引用');
+          if (Object.hasOwn(pairs, service)) throw Error('重复的 Service 名称：' + service);
+          pairs[service] = credential;
+        }
+        return pairs;
+      },
+    };
+  }
   function edit(title, fields, commit, submit = '保存') {
     const form = byId('desk-form');
     form.replaceChildren();
@@ -226,9 +262,22 @@ window.createLoomDesk = function createLoomDesk(client) {
     head.append(node('h2', '', title), button('关闭', dismiss));
     form.append(head);
     const inputs = [];
+    const advanced = node('details', 'desk-form-advanced');
+    const advancedTitle = fields.find((f) => typeof f.advanced === 'string')?.advanced;
+    advanced.append(node('summary', '', advancedTitle || '更多设置'));
     for (const f of fields) {
-      const wrap = node('label', 'desk-field');
+      const wrap = node(f.type === 'pairs' ? 'div' : 'label', 'desk-field');
       wrap.append(node('span', '', f.title));
+      const section = f.advanced ? advanced : form;
+      if (f.type === 'pairs') {
+        const pairs = credentialPairs(f.value);
+        wrap.setAttribute('role', 'group');
+        wrap.setAttribute('aria-label', f.title);
+        wrap.append(pairs.element);
+        section.append(wrap);
+        inputs.push([f, pairs]);
+        continue;
+      }
       const wide = ['json', 'textarea', 'code', 'multiple'].includes(f.type);
       const inp = node(f.type === 'select' || f.type === 'multiple' ? 'select' : wide ? 'textarea' : 'input');
       if (f.type === 'select' || f.type === 'multiple') {
@@ -253,14 +302,16 @@ window.createLoomDesk = function createLoomDesk(client) {
         if (f.type === 'json' || f.type === 'code') inp.className = 'desk-code';
       }
       if (f.placeholder) inp.placeholder = f.placeholder;
+      if (f.maxLength) inp.maxLength = f.maxLength;
       inp.name = f.name;
       inp.required = !!f.required;
       inp.disabled = !!f.disabled;
       wrap.append(inp);
       if (f.hint) wrap.append(node('small', '', f.hint));
-      form.append(wrap);
+      section.append(wrap);
       inputs.push([f, inp]);
     }
+    if (advanced.childElementCount > 1) form.append(advanced);
     const err = node('p', 'desk-form-error');
     err.setAttribute('role', 'alert');
     const save = node('button', 'desk-button primary', submit);
@@ -274,7 +325,8 @@ window.createLoomDesk = function createLoomDesk(client) {
       err.textContent = '';
       try {
         for (const [f, i] of inputs) {
-          if (f.type === 'json') {
+          if (f.type === 'pairs') values[f.name] = i.read();
+          else if (f.type === 'json') {
             try {
               values[f.name] = JSON.parse(i.value);
             } catch {
@@ -289,18 +341,24 @@ window.createLoomDesk = function createLoomDesk(client) {
                   : i.value;
         }
         save.disabled = true;
+        save.textContent = '正在保存…';
         await commit(values);
         if (identity === owner && save.isConnected) dismiss();
       } catch (e) {
         if (save.isConnected) err.textContent = e.message;
       } finally {
         save.disabled = false;
+        save.textContent = submit;
       }
     };
     if (!editor.open) editor.showModal();
     form.querySelector('input:not(:disabled),select:not(:disabled),textarea:not(:disabled)')?.focus();
   }
   const call = (path, method = 'GET', body, key) => client.request(path, { method, body, key });
+  function requestFor(actor, path, method, body) {
+    if (identity !== actor) throw Error('账户已切换，请重新打开操作。');
+    return call(path, method, body);
+  }
   const activeRead = (path, opts = {}) => client.request(path, { signal: reader.signal, ...opts });
   const move = (section, id) => () => open(section, id);
   function packagesMenu() {
@@ -313,6 +371,30 @@ window.createLoomDesk = function createLoomDesk(client) {
   function editThen(section, id) {
     return async () => open(section, id, { replace: true });
   }
+  function viewPosition() {
+    const content = byId('desk-content');
+    const row = document.activeElement?.closest('#desk-content .desk-row');
+    return {
+      position: panel.scrollTop,
+      filters: [...content.querySelectorAll('.desk-search')].map((input) => input.value),
+      focusRow: row?.querySelector('strong')?.textContent,
+    };
+  }
+  function restorePosition(state) {
+    const content = byId('desk-content');
+    content.querySelectorAll('.desk-search').forEach((input, index) => {
+      if (!state.filters?.[index]) return;
+      input.value = state.filters[index];
+      input.dispatchEvent(new Event('input'));
+    });
+    if (state.focusRow) {
+      const row = [...content.querySelectorAll('button.desk-row')].find(
+        (r) => r.querySelector('strong')?.textContent === state.focusRow,
+      );
+      row?.focus({ preventScroll: true });
+    }
+    panel.scrollTop = state.position || 0;
+  }
   async function open(section, id, options = {}) {
     if (!identity) {
       client.signIn();
@@ -320,8 +402,10 @@ window.createLoomDesk = function createLoomDesk(client) {
     }
     if (!label[section]) return;
     const before = current;
+    const refreshing = before?.section === section && before?.id === id;
+    const restore = refreshing ? viewPosition() : options;
     if (before && !options.replace && (before.section !== section || before.id !== id))
-      sequence.push({ ...before, position: panel.scrollTop });
+      sequence.push({ ...before, ...viewPosition() });
     if (!before) {
       sequence = [];
       lastFocus = document.activeElement;
@@ -348,26 +432,35 @@ window.createLoomDesk = function createLoomDesk(client) {
     byId('desk-back').hidden = !sequence.length && !id;
     byId('desk-title').textContent = label[section];
     byId('desk-heading').textContent = id || label[section];
-    byId('desk-content').replaceChildren();
-    notice('正在读取…');
-    panel.scrollTop = 0;
+    const content = byId('desk-content');
+    if (!refreshing) { content.replaceChildren(); panel.scrollTop = 0; }
+    content.inert = true;
+    content.setAttribute('aria-busy', 'true');
+    notice('');
+    const pendingNotice = setTimeout(() => {
+      if (turn === revision) notice('正在读取…');
+    }, 200);
     try {
       const parts = await views[section](id);
       if (turn !== revision) return;
       byId('desk-content').replaceChildren(...parts.filter(Boolean));
+      content.inert = false;
       notice('');
-      if (options.position) panel.scrollTop = options.position;
-      if (!options.replace) byId('desk-heading').focus({ preventScroll: true });
+      restorePosition(restore);
+      if (!options.replace && !refreshing) byId('desk-heading').focus({ preventScroll: true });
     } catch (e) {
       if (turn === revision) {
         notice(e.message, true);
-        byId('desk-content').append(button('重新读取', editThen(section, id)));
+        content.replaceChildren(button('重新读取', editThen(section, id)));
       }
+    } finally {
+      clearTimeout(pendingNotice);
+      if (turn === revision) { content.inert = false; content.removeAttribute('aria-busy'); }
     }
   }
   byId('desk-back').addEventListener('click', () => {
     const prev = sequence.pop();
-    if (prev) open(prev.section, prev.id, { replace: true, position: prev.position });
+    if (prev) open(prev.section, prev.id, { ...prev, replace: true });
     else if (current?.id) open(current.section, undefined, { replace: true });
     else close();
   });
@@ -491,7 +584,8 @@ window.createLoomDesk = function createLoomDesk(client) {
     if (!id) {
       const rows = await activeRead('agents');
       return [
-        controls(button('创建 Agent', () => editAgent(), 'desk-button primary')),
+        controls(button('创建 Agent', () => editAgent(), 'desk-button primary'),
+          creatorAction('我想创建一个 Agent。请先和我确认用途，再检查可用的工具和授权。')),
         list(
           rows,
           (a) => [
@@ -513,6 +607,7 @@ window.createLoomDesk = function createLoomDesk(client) {
         button('与 Agent 对话', () => client.chat(id), 'desk-button primary'),
         button('编辑 Agent', () => editAgent(a)),
         button('绑定工具', () => bind(a)),
+        creatorAction('请和我一起检查 Agent ' + id + ' 的用途与工具配置，先给出改进建议。'),
       ),
       facts([
         ['名称', a.name],
@@ -574,6 +669,196 @@ window.createLoomDesk = function createLoomDesk(client) {
     });
     return group('', controls(b), output);
   }
+  function creatorAction(prompt) {
+    const b = button('与创造者讨论', () => client.draftWithCreator(prompt), 'desk-link creator-action');
+    if (!client.draftWithCreator || (client.hasCreator && !client.hasCreator())) {
+      b.disabled = true;
+      b.title = '此账户还没有可对话的创造者 Agent';
+    }
+    return b;
+  }
+
+  async function oiSetup(instance = null, settings = {}) {
+    const actor = identity;
+    if (!actor?.admin) return;
+    const plugins = instance ? [] : await activeRead('plugins');
+    let suggestion = 'office';
+    for (let i = 2; plugins.some((p) => p.id === suggestion); i++) suggestion = 'office-' + i;
+    const fields = [
+      ...(!instance ? [ident('instance', '连接名称', suggestion)] : []),
+      field('base_url', 'OIS 地址', settings.base_url || '', 'url', {
+        required: true, placeholder: 'http://127.0.0.1:25220', hint: '填写 OIS 服务地址，例如 http://127.0.0.1:25220。',
+      }),
+      field('catalog_service', '目录 Service', settings.catalog_service || 'oi-catalog', 'text', { required: true }),
+      field('catalog_credential_ref', '目录凭据引用', settings.catalog_credential_ref || '', 'text', {
+        required: true, placeholder: 'oi-directory', hint: '使用宿主已配置的凭据名。例如 oi-directory 对应 LOOM_MCP_CREDENTIAL_OI_DIRECTORY。',
+      }),
+      field('consumer_credential_ref', '默认调用凭据', settings.consumer_credential_ref || '', 'text', {
+        placeholder: 'oi-workbench', required: !!settings.consumer_credential_ref,
+        hint: '用于读取工具和发起调用。各 Service 使用独立凭据时，可在下方分别指定。',
+      }),
+      field('service_credentials', 'Service 专用凭据', settings.service_credentials || {}, 'pairs'),
+      field('refresh_interval_secs', '自动刷新间隔（秒）', settings.refresh_interval_secs || 30, 'number', { advanced: true }),
+    ];
+    let saved = instance;
+    let savedSettings = settings;
+    edit(instance ? '编辑 OI 连接' : '连接 Loom OI', fields, async (v) => {
+      const origin = new URL(v.base_url.trim());
+      if (!['https:', 'http:'].includes(origin.protocol) || origin.username || origin.password ||
+          origin.search || origin.hash || origin.pathname !== '/') throw Error('请填写 OIS 的协议、主机和端口。');
+      const id = instance?.id || v.instance.trim();
+      if (!v.consumer_credential_ref.trim() && !Object.keys(v.service_credentials).length)
+        throw Error('请设置默认调用凭据，或为要使用的 Service 添加专用凭据。');
+      const interval = Number(v.refresh_interval_secs);
+      if (!Number.isInteger(interval) || interval < 1 || interval > 86400) throw Error('刷新间隔应为 1 到 86400 秒的整数。');
+      if (saved && saved.id !== id) throw Error('连接已创建为 ' + saved.id + '，请沿用这个名称继续配置。');
+      if (!saved) saved = await requestFor(actor, 'plugins', 'POST', { id, package: 'internal-tools', version: '1.0.0', enabled: false });
+      const change = {
+        base_url: origin.origin, catalog_service: v.catalog_service.trim(), catalog_credential_ref: v.catalog_credential_ref.trim(),
+        service_credentials: v.service_credentials, refresh_interval_secs: interval, ...rev(savedSettings),
+      };
+      if (v.consumer_credential_ref.trim()) change.consumer_credential_ref = v.consumer_credential_ref.trim();
+      savedSettings = await requestFor(actor, 'settings/' + eid(id), 'PATCH', change);
+      if (!saved.enabled) saved = await requestFor(actor, 'plugins/' + eid(id), 'PATCH', { ...rev(saved), enabled: true });
+      if (identity !== actor) return;
+      await open('plugins', id, { replace: true });
+      const refresh = document.querySelector('#desk-content [data-oi-refresh]');
+      if (refresh) refresh.click();
+    }, '连接并发现服务');
+  }
+
+  async function grantOiService(service, agents, instance) {
+    const actor = identity;
+    if (!actor?.admin) return;
+    if (!agents.length) {
+      notice('请先创建一个 Agent，再绑定这个 Service。', true);
+      return;
+    }
+    const active = client.currentAgent();
+    const preferred = agents.find((a) => a.id === active)?.id || agents[0].id;
+    edit('将 ' + service.service + ' 连接到 Agent', [
+      field('agent_id', 'Agent', preferred, 'select', { required: true, options: agents.map((a) => [a.id, a.name ? a.name + ' · ' + a.id : a.id]) }),
+      field('scope', '授予的工具集', service.id, 'text', { disabled: true, hint: 'Agent 可调用下列工具，也会获得这个 Service 此后发布的成员。' }),
+      field('members', '当前工具', service.members.map((m) => m.slice(service.id.length + 1)).join('、'), 'textarea', { disabled: true }),
+    ], async (v) => {
+      const a = await requestFor(actor, 'agents/' + eid(v.agent_id));
+      const tools = [...(a.tools || [])];
+      const grants = { ...a.grants };
+      if (!tools.some((b) => b?.toolset === service.id)) tools.push({ toolset: service.id });
+      grants.toolsets = [...new Set([...(grants.toolsets || []), service.id])];
+      await requestFor(actor, 'agents/' + eid(a.id), 'PATCH', { ...rev(a), tools, grants });
+      if (identity !== actor) return;
+      await client.reloadAgents();
+      await open('plugins', instance.id, { replace: true });
+    }, '授权并绑定');
+  }
+
+  function serviceWorkspace(instance, settings, discovery, agents) {
+    const view = node('section', 'oi-workspace');
+    const summary = node('div', 'oi-connection');
+    const intro = node('div', 'oi-connection-copy');
+    intro.append(node('h3', '', '服务目录'), node('p', '', settings.base_url || '配置 OIS 地址后，即可查看已发布的 Service。'));
+    const refresh = button('刷新目录', async () => {
+      refresh.textContent = '正在发现…';
+      try {
+        await call('plugins/' + eid(instance.id) + '/refresh', 'POST', {});
+        if (view.isConnected) await open('plugins', instance.id, { replace: true, position: panel.scrollTop });
+      } finally { refresh.textContent = '刷新目录'; }
+    });
+    refresh.dataset.oiRefresh = '';
+    refresh.disabled = !instance.enabled || !settings.base_url;
+    summary.append(intro, controls(
+      button(settings.base_url ? '连接设置' : '配置连接', () => oiSetup(instance, settings)),
+      refresh,
+    ));
+    view.append(summary);
+    const services = discovery.services || [];
+    const failureText = (message, reference) => {
+      if (message.includes('missing MCP credential') && reference)
+        return '宿主尚未提供凭据 ' + reference + '。请在 Harness 进程配置 LOOM_MCP_CREDENTIAL_' +
+          reference.replaceAll('-', '_').toUpperCase() + ' 后刷新。';
+      if (/status (401|403)/.test(message))
+        return 'OI 拒绝了当前身份。请核对连接设置中的凭据引用以及 OIS 的 Service 授权。';
+      if (message.includes('MCP transport:'))
+        return '暂时无法连接 OIS。请检查服务地址和运行状态，再刷新目录。';
+      return message;
+    };
+    if (!instance.enabled || discovery.stale || discovery.error || !services.length) {
+      const reason = !instance.enabled ? '连接已停用。' : (discovery.error && failureText(discovery.error, settings.catalog_credential_ref)) ||
+        (discovery.stale ? '连接设置已变化，等待重新发现。' : discovery.healthy ? '目录暂未发布任何 Service。' : '等待首次发现服务。');
+      view.append(node('p', 'oi-notice', reason));
+    }
+    for (const item of discovery.conflicts || []) {
+      view.append(node('p', 'oi-notice', item.agent_id + ' · ' + item.error));
+    }
+    const cards = node('div', 'oi-services');
+    for (const service of services) {
+      const card = node('article', 'oi-service');
+      card.dataset.service = service.id;
+      const ready = instance.enabled && !discovery.stale && service.ready;
+      const top = node('div', 'oi-service-head');
+      const names = node('div', '');
+      names.append(node('h4', '', service.service), node('small', '', service.id));
+      top.append(names, node('span', 'oi-state ' + (ready ? 'ready' : ''), ready ? '可用' : '不可用'));
+      card.append(top);
+      if (service.error) card.append(node('p', 'oi-notice', failureText(service.error,
+        settings.service_credentials?.[service.service] || settings.consumer_credential_ref)));
+      const members = service.members || [];
+      const items = node('div', 'oi-member-list');
+      const memberLink = (member) => link(member.slice(service.id.length + 1), 'tools', member);
+      items.append(...members.slice(0, 3).map(memberLink));
+      if (members.length > 3) {
+        const detail = node('details', 'oi-members');
+        detail.append(node('summary', '', '另 ' + (members.length - 3) + ' 个工具'));
+        const rest = node('div', 'oi-member-list');
+        rest.append(...members.slice(3).map(memberLink));
+        detail.append(rest); items.append(detail);
+      } else if (!members.length) items.append(node('small', '', '暂无工具'));
+      card.append(items);
+      const bound = agents.filter((a) => (a.tools || []).some((b) => b?.toolset === service.id) && a.grants?.toolsets?.includes(service.id));
+      const actions = controls();
+      const available = agents.filter((a) => !bound.includes(a));
+      if (available.length || !bound.length) {
+        const assign = button('连接到 Agent', () => grantOiService(service, available, instance));
+        assign.disabled = !ready || !members.length || !available.length;
+        actions.append(assign);
+      }
+      const prompt = members.includes(service.id + '.list_skills') ? '请使用 list_skills 列出这个主机上的 Skill，并说明各自的用途。'
+        : members.includes(service.id + '.list_hosts') ? '请使用 list_hosts 查看已连接的主机和在线状态。'
+          : '请介绍 ' + service.service + ' 工具集中你可以使用哪些工具。';
+      bound.forEach((a) => {
+        const chat = button('与' + (a.name || a.id) + '对话', () => client.draftWithAgent
+          ? client.draftWithAgent(a.id, prompt) : client.chat(a.id), 'desk-link');
+        chat.dataset.chatAgent = a.id;
+        chat.title = a.id;
+        chat.disabled = !ready;
+        actions.append(chat);
+      });
+      card.append(actions);
+      cards.append(card);
+    }
+    if (cards.childElementCount) view.append(cards);
+    return view;
+  }
+  async function oiView() {
+    if (!identity.admin) throw Error('请使用管理员账户配置 OI 连接。');
+    const items = (await activeRead('plugins')).filter((p) => p.package === 'internal-tools');
+    if (items.length === 1) {
+      const instance = items[0];
+      const [settings, discovery, agents] = await Promise.all([
+        activeRead('settings/' + eid(instance.id)), activeRead('plugins/' + eid(instance.id) + '/discovery'), activeRead('agents'),
+      ]);
+      return [
+        controls(link(instance.id + ' · 实例详情', 'plugins', instance.id), button('添加连接', () => oiSetup())),
+        serviceWorkspace(instance, settings, discovery, agents),
+      ];
+    }
+    return [
+      controls(button('连接 Loom OI', () => oiSetup(), 'desk-button primary')),
+      list(items, (p) => [p.id, 'Loom OI', p.enabled ? '已启用' : '已停用', move('plugins', p.id)], '还没有 OI 连接。'),
+    ];
+  }
+
   function pluginSettings(id, settings, schema) {
     const config = { ...settings };
     delete config.revision;
@@ -628,8 +913,10 @@ window.createLoomDesk = function createLoomDesk(client) {
       const [rows, packages] = await Promise.all([activeRead('plugins'), activeRead('catalog/packages')]);
       return [
         controls(
-          button('创建实例', () => instanceForm(null), 'desk-button primary'),
+          button('连接 Loom OI', () => oiSetup(), 'desk-button primary'),
+          button('创建实例', () => instanceForm(null)),
           button('安装插件版本', () => installVersion()),
+          creatorAction('我想为当前工作台添加插件。请先了解我的需求，再对照已经安装的能力给出方案。'),
         ),
         group(
           '实例',
@@ -661,8 +948,9 @@ window.createLoomDesk = function createLoomDesk(client) {
     const sections = [
       controls(
         button('编辑实例', () => instanceForm(p)),
-        button('编辑设置', () => pluginSettings(id, settings, schema)),
+        p.package !== 'internal-tools' && button('编辑设置', () => pluginSettings(id, settings, schema)),
         button('安装版本', () => installVersion(p.package)),
+        p.package !== 'internal-tools' && creatorAction('我正在查看插件实例 ' + id + '（包 ' + p.package + '，版本 ' + p.version + '）。请协助我理解可以调整哪些设置。'),
       ),
       facts([
         ['状态', p.enabled ? '已启用' : '已停用'],
@@ -688,12 +976,12 @@ window.createLoomDesk = function createLoomDesk(client) {
       }),
     ];
     if (p.package === 'internal-tools') {
-      sections.splice(
-        1,
-        0,
-        externalAction('刷新 OI 服务目录', () => call('plugins/' + eid(id) + '/refresh', 'POST', {})),
-        externalAction('查看 OI 发现结果', () => activeRead('plugins/' + eid(id) + '/discovery')),
-      );
+      const [discovery, agents] = await Promise.all([activeRead('plugins/' + eid(id) + '/discovery'), activeRead('agents')]);
+      const more = node('details', 'oi-advanced');
+      more.append(node('summary', '', '实例与技术详情'), ...sections, data('目录诊断原文', discovery));
+      return [serviceWorkspace(p, settings, discovery, agents),
+        controls(creatorAction('我正在使用 OI 连接 ' + id + '。请帮我检查它能访问的 Host 和 Service，先说明当前配置。')),
+        more];
     }
     return sections;
   }
@@ -716,8 +1004,21 @@ window.createLoomDesk = function createLoomDesk(client) {
           required: !t,
           hint: t ? '留空保留原实现。' : '',
         }),
+        field('suggestion_label', '对话建议标题', t?.webui?.suggestion?.label || '', 'text', { advanced: '输入框建议', maxLength: 64 }),
+        field('suggestion_prompt', '草稿内容', t?.webui?.suggestion?.prompt || '', 'textarea', {
+          advanced: '输入框建议', maxLength: 1200, hint: '用户点选建议时，将这段文字填入 Agent 的输入框。',
+        }),
       ],
       async (v) => {
+        const label = v.suggestion_label.trim(), prompt = v.suggestion_prompt.trim();
+        if (Boolean(label) !== Boolean(prompt)) throw Error('请同时填写建议标题和草稿内容，或将两项都留空。');
+        delete v.suggestion_label;
+        delete v.suggestion_prompt;
+        if (label || t?.webui?.suggestion) {
+          v.webui = { ...t?.webui };
+          if (label) v.webui.suggestion = { label, prompt };
+          else delete v.webui.suggestion;
+        }
         v.allowed_agents = v.allowed_agents
           .split(',')
           .map((s) => s.trim())
@@ -843,7 +1144,7 @@ window.createLoomDesk = function createLoomDesk(client) {
     if (!id)
       return [
         packagesMenu(),
-        controls(button('新建连接', () => connectionForm(null), 'desk-button primary')),
+        controls(button('新建连接', () => connectionForm(null), 'desk-button primary'), link('OI 连接', 'oi')),
         list(await activeRead('mcp/connections'), (c) => [
           c.id,
           c.url,
@@ -1407,6 +1708,7 @@ window.createLoomDesk = function createLoomDesk(client) {
     ];
   }
   const views = {
+    oi: oiView,
     agents: agentView,
     plugins: pluginsView,
     tools: toolsView,

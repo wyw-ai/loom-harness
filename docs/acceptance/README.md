@@ -4,6 +4,8 @@
 
 ## 从哪里开始
 
+网页交互的实测记录包括同一 DeepSeek 账号下的 Markdown 表格题、工具执行过程和插件入口。[DSH 与 Loom 网页对照](webui-comparison.md)
+
 普通问答支持实时读取第一段正文。直连 DeepSeek 与两种 Loom 部署的实测见[流式首 token 与调度耗时](first-token.md)。
 
 先用普通用户身份跑 [A01–A03 日常会话](conversation.md)。第一次直接问答，第二次用真实工具完成一次排查，然后关掉客户端重开，接着上一句问。其余用例每次从自己的前置数据开始，可以单独重跑。

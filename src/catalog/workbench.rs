@@ -1,4 +1,4 @@
-use super::resources::{descriptor, scoped};
+use super::resources::{descriptor, normalize_tool_webui, scoped};
 use super::*;
 
 fn catalog_key(local: &str) -> R<String> {
@@ -116,11 +116,13 @@ impl Catalog {
             "requires_approval",
             "approval",
             "allowed_agents",
+            "webui",
         ] {
             if let Some(v) = change.get(field) {
                 yaml[field] = v.clone();
             }
         }
+        normalize_tool_webui(&mut yaml)?;
         let code = change
             .get("code")
             .or_else(|| old.get("code"))

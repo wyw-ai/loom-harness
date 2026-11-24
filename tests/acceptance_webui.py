@@ -9,6 +9,69 @@ from harness import Instance
 
 
 class WebUi(unittest.TestCase):
+    def test_lua_tool_suggestion_limits(self):
+        with Instance() as loom:
+            for suggestion in (
+                "{label=' ',prompt='ok'}",
+                "{label='ok',prompt=12}",
+                "{label=string.rep('😀',33),prompt='ok'}",
+                "{label='ok',prompt=string.rep('😀',601)}",
+            ):
+                with self.subTest(suggestion=suggestion), self.assertRaises(HTTPError) as invalid:
+                    loom.api("POST", "plugins/hints/versions", {
+                        "version": "1",
+                        "code": "register_tool({id='read',webui={suggestion=" + suggestion
+                            + "},handler=function() return true end})",
+                    }, token="admin-token")
+                self.assertEqual(invalid.exception.code, 400)
+                invalid.exception.close()
+
+    def test_session_previews_after_reload(self):
+        with Instance() as loom:
+            for agent in ("reader", "writer"):
+                loom.api("POST", "agents", {"id": agent})
+
+            def session(agent="reader", **fields):
+                return loom.api("POST", "sessions", {"agent_id": agent, **fields})["id"]
+
+            def attach(sid, eid):
+                loom.api("POST", f"events/{eid}/deliveries", {
+                    "target": {"session_id": sid}, "action": "attach",
+                })
+
+            def message(sid, content, token="user-token"):
+                attach(sid, loom.api("POST", "events", {"content": content}, token=token)["id"])
+
+            untitled, named, empty = session(), session(title="自定义标题"), session()
+            legacy = session("writer")
+            foreign = loom.api("POST", "sessions", {}, token="other-token")["id"]
+            internal = loom.api("GET", "events?type=agent.system_prompt_updated&agent_id=reader")[0]
+            attach(untitled, internal["id"])
+            message(untitled, [{"type": "attachment", "attachment_id": "ignored"}])
+            message(untitled, " \t\u3000")
+            message(untitled, [
+                {"type": "text", "text": "  规划\n"},
+                {"type": "image_url", "image_url": {"url": "ignored"}},
+                {"type": "text", "text": "\u3000执行　\t" + "😀" * 56},
+            ])
+            message(untitled, "后来补充的信息")
+            message(named, "不能取代手写标题")
+            # Older/admin-authored user history may have no explicit event.source.
+            message(legacy, " 老会话\n原文 ", token="admin-token")
+
+            loom.stop()
+            loom.start()
+            self.assertTrue(all("first_user_preview" not in item for item in loom.api("GET", "sessions")))
+            by_id = {s["id"]: s for s in loom.api("GET", "sessions?agent_id=reader&include=preview")}
+            self.assertEqual(set(by_id), {untitled, named, empty})
+            self.assertEqual(by_id[untitled]["first_user_preview"], ("规划 执行 " + "😀" * 56)[:48])
+            self.assertEqual(by_id[named]["title"], "自定义标题")
+            self.assertNotIn("first_user_preview", by_id[named])
+            self.assertNotIn("first_user_preview", by_id[empty])
+            all_visible = {s["id"]: s for s in loom.api("GET", "sessions?include=preview")}
+            self.assertEqual(all_visible[legacy]["first_user_preview"], "老会话 原文")
+            self.assertNotIn(foreign, all_visible)
+
     def test_public_assets_follow_plugin_state_and_data_requires_a_token(self):
         with Instance() as loom:
             assets = {
@@ -16,6 +79,10 @@ class WebUi(unittest.TestCase):
                 "/webui/app.css": "text/css",
                 "/webui/app.js": "text/javascript",
                 "/webui/desk.js": "text/javascript",
+                "/webui/shell.js": "text/javascript",
+                "/webui/richtext.js": "text/javascript",
+                "/webui/chat-flow.css": "text/css",
+                "/webui/desk-workspace.css": "text/css",
             }
             for path, content_type in assets.items():
                 with urlopen(loom.base + path) as response:
@@ -65,11 +132,13 @@ class WebUi(unittest.TestCase):
                 {
                     "id": "build.label",
                     "description": "Name this build",
+                    "webui": {"suggestion": {"label": "查构建", "prompt": "请检查本次构建。"}},
                     "code": "return function(ctx,args) return 'build' end",
                     "allowed_agents": ["reader"],
                 },
             )
             self.assertEqual(tool["id"], "home.build%2Elabel")
+            self.assertEqual(tool["webui"]["suggestion"]["label"], "查构建")
             toolset = admin(
                 "POST", "catalog/toolsets", {"id": "builds", "members": [tool["id"]]}
             )
@@ -93,6 +162,13 @@ class WebUi(unittest.TestCase):
                 )
             self.assertEqual(stale.exception.code, 409)
             stale.exception.close()
+            with self.assertRaises(HTTPError) as malformed:
+                admin("PATCH", path, {
+                    "webui": {"suggestion": {"label": "缺少提示"}},
+                    "expected_revision": edited["revision"],
+                })
+            self.assertEqual(malformed.exception.code, 400)
+            malformed.exception.close()
             loom.api(
                 "POST",
                 "agents",
@@ -108,6 +184,8 @@ class WebUi(unittest.TestCase):
                 admin("GET", path + "/versions/" + tool["revision"])["description"],
                 "Name this build",
             )
+            admin("PATCH", path, {"webui": {}, "expected_revision": edited["revision"]})
+            self.assertFalse(loom.api("GET", "agents/reader/tools")[0].get("webui"))
             self.assertIn(
                 toolset["id"],
                 [s["id"] for s in admin("GET", "catalog/toolsets") if s["editable"]],

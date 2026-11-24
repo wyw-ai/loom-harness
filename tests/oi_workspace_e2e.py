@@ -103,8 +103,17 @@ def launch(stack, exe, conf, env, folder):
 
     def stop():
         if proc.poll() is None:
-            proc.terminate()
-            proc.wait(timeout=15)
+            # Let OIC close its app workers and release the host workspace first.
+            try:
+                subprocess.run(
+                    [str(exe), "--config", str(conf), "stop"],
+                    env=env, cwd=folder, capture_output=True, timeout=15, check=True,
+                )
+                proc.wait(timeout=15)
+            except (subprocess.SubprocessError, OSError):
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=15)
 
     stack.callback(stop)
 
@@ -344,7 +353,9 @@ def run(cli, folder, stack):
                 "tools": []
                 if cli.browser and name == "reader"
                 else [{"toolset": group}],
-                "grants": {"toolsets": [group]},
+                "grants": {"operations": ["context.preview"]}
+                if cli.browser and name == "reader"
+                else {"toolsets": [group]},
                 "model": "test",
             },
         )

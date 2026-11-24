@@ -16,6 +16,7 @@ async function login(page, token) {
   await page.locator('#token-input').fill(token);
   await page.locator('#credential-save').click();
   await page.locator('#credential-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#nav-workspace').click();
   await page.locator('#desk-nav').getByRole('button', { name: '运行', exact: true }).waitFor();
 }
 
@@ -44,27 +45,27 @@ async function bind(page) {
   await login(page, 'admin-token');
   await nav(page, '插件').click();
   await row(page, 'office').click();
-  await page.getByRole('button', { name: '查看 OI 发现结果', exact: true }).click();
-  const discovery = await details(page, '查看 OI 发现结果');
-  const service = discovery.services.find(item => item.id === group);
-  assert.equal(service?.service, 'workbench', 'Service discovery must expose the workbench Toolset');
-  assert.equal(service.ready, true);
-
-  await nav(page, '工具目录').click();
-  await page.getByRole('button', { name: '工具集', exact: true }).click();
-  await row(page, group).click();
-  for (const id of members) await row(page, id).waitFor();
-
-  await nav(page, 'Agent').click();
-  await row(page, 'reader').click();
-  await page.getByRole('button', { name: '绑定工具', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '绑定工具' });
-  await dialog.getByRole('listbox').selectOption({ label: '工具集 · ' + group });
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  const service = page.locator('article.oi-service[data-service="' + group + '"]');
+  await service.getByText('可用', { exact: true }).waitFor();
+  await service.locator('summary').click();
+  for (const id of members) await service.getByRole('button', {name:id.slice(group.length + 1), exact:true}).waitFor();
+  await service.getByRole('button', { name: '连接到 Agent' }).click();
+  const dialog = page.getByRole('dialog', { name: '将 workbench 连接到 Agent' });
+  await dialog.getByRole('combobox').selectOption('reader');
+  await dialog.getByRole('button', { name: '授权并绑定', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
   await page.locator('#desk-refresh').click();
+  const tryInChat = service.locator('button[data-chat-agent="reader"]');
+  await tryInChat.waitFor();
+  await tryInChat.click();
+  await page.waitForFunction(() => document.querySelector('#prompt').value.includes('list_skills'));
+  await page.locator('#nav-workspace').click();
+  await nav(page, 'Agent').click();
+  await row(page, 'reader').click();
   const agent = await details(page, 'Agent spec');
   assert.deepEqual(agent.tools, [{ toolset: group }]);
+  assert.ok(agent.grants.toolsets.includes(group));
+  assert.ok(agent.grants.operations.includes('context.preview'));
   for (const id of members) await row(page, id).waitFor();
   console.log('Browser verified OI discovery and bound the published workbench to reader.');
 }

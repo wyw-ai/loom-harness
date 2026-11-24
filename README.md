@@ -16,15 +16,26 @@ cargo run --locked
 
 启动服务后打开 [WebUI](http://127.0.0.1:7331/webui/)，用上面配置的用户令牌连接，选择 Agent 并开始对话。令牌仅保留在当前页面内存中。刷新后重新连接即可读回服务端保存的会话。
 
-空会话会按 Agent 当前获准使用的工具显示示例。点击示例会填入草稿，发送后才会产生用户消息。例如可以让普通 Agent 查找当前会话的笔记，也可以让已获 `agents.update` 授权的创造者「把你自己的描述改成『负责整理构建日志』」。后者通过正常的 Run 调用工具并保存 Agent 修订。创造者模板的写权限由管理员通过 grants 单独授予。
+从「会话」选择 Agent 或最近的对话。输入框里敲 `/` 可以选操作，敲 `@` 可以查当前 Agent 的工具并插入它的实际调用名。空会话显示这个 Agent 能做的事，例如让已接入主机的 Agent「浏览主机 Skill」。选择示例只填入草稿，按发送才会产生消息。Run 进行中可以在原地补充、回答或停止。工具过程折在对应轮次下，展开可查参数和回执。
 
 页面由默认启用的官方 `webui` 插件提供。管理员可以通过 `PATCH /api/plugins/webui` 设置 `{"enabled":false}` 关闭页面入口，已有会话仍保存在服务端。
 
-侧栏提供 Agent、工具目录、运行、事件、调度和宿主入口。管理员还可管理插件实例、版本、设置、MCP 连接和 HOME 中的独立工具与工具集。在 Agent 详情修改配置或通过「与 Agent 对话」交给已获授权的创造者修改，两种操作都能在同一份 Agent spec 核实。Run 详情列出实际使用的模型消息、工具、回执和时序。旧 HOME 中官方聊天插件 `webui@1.0.0` 会升级到工作台 `1.1.0`，升级保留实例的启停状态。
+侧栏的「工作台」管理 Agent、插件、工具和调度。「搜索」（Ctrl K，macOS 上为 ⌘ K）可跳到资源、会话或 OI 接入。资源详情的「与创造者讨论」会把当前对象带入有权限的创造者对话。可授权创造者通过 `agents.update` 修改自身描述，再回 Agent 详情核实新修订。Run 详情列出实际使用的模型消息、工具、回执和时序。官方 `webui@1.0.0` 与 `1.1.0` 实例会升级到 `1.2.0`，保留原有启停和访问范围。
+
+工具可以贡献与自己相关的输入建议。在独立工具编辑器中填写建议标题和正文，或在工具定义里声明如下字段。网页从 Agent 的生效工具目录取建议；点击时复核当前授权。这个静态入口与基于上文生成的「推荐」共用草稿框。
+
+```yaml
+webui:
+  suggestion:
+    label: 查构建
+    prompt: 请检查本次构建，列出失败步骤和对应日志。
+```
+
+Lua 插件在 `loom.register_tool({...})` 的同一张工具声明表中设置 `webui = {suggestion = {label = "查构建", prompt = "请检查本次构建。"}}` 即可。空会话优先展示六条建议，输入 `/` 可以按名称检索其余建议。
 
 ### 接入 Loom OI
 
-在 OIS 发布目录 Service 和工作 Service 后，管理员用官方包 `internal-tools@1.0.0` 创建实例，填入 OIS 地址和凭据引用。在「插件」检查发现结果，然后在 Agent 详情授予并选择对应工具集。例如 `office.workbench` 的成员 `view_on_a` 在模型请求中仍叫 `view_on_a`。使用读图能力时，请为 Agent 配置支持图片的模型路由（`images: true`）。从 ToolCall 的 `oi_call_id` 和 `binding.source` 可以定位目标主机上的调用。[实例设置、凭据与 Agent YAML](docs/spec/reference/oi-workspace-tools.md)
+在 OIS 发布目录 Service 和工作 Service 后，管理员打开「工作台 → OI 连接」，也可以按 Ctrl K 搜索「接入 OI」。点「连接 Loom OI」，填入 OIS 服务地址、目录 Service 和已配置的凭据引用，保存后即可查看发现的 Service。选择一个 Service，点「连接到 Agent」完成授权与工具集绑定，再点该 Agent 的对话按钮即可试用。已连接实例直接从 Service 列表开始。例如 `office.workbench` 的 `view_on_a` 在模型请求中仍叫 `view_on_a`。读图时请使用支持图片的模型路由（`images: true`）。ToolCall 的 `oi_call_id` 和 `binding.source` 可定位目标主机上的调用。[实例设置、凭据与 Agent YAML](docs/spec/reference/oi-workspace-tools.md)
 
 ### 通过 API 发送消息
 

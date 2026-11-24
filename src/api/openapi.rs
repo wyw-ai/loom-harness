@@ -116,6 +116,12 @@ pub(super) fn document(mut paths: Value, who: &crate::config::Identity) -> Value
                 if let Some((name, description)) = filter {
                     op["parameters"] = json!([{"name":name,"in":"query","schema":{"type":"string"},"description":description}]);
                 }
+                if path == "sessions" {
+                    op["parameters"] = json!([
+                        {"name":"agent_id","in":"query","schema":{"type":"string"},"description":"Filter sessions by Agent ID."},
+                        {"name":"include","in":"query","schema":{"type":"string","enum":["preview"]},"description":"Include first_user_preview for untitled sessions with user text. The first message is flattened to at most 48 Unicode characters."}
+                    ]);
+                }
             }
             if path == "runs/{id}/stream" {
                 op = json!({
