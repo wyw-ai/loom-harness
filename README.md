@@ -4,13 +4,21 @@
 
 ## 本机运行
 
-准备稳定版 Rust、C 编译器及 Redis 6.2 或更高版本。用 `cargo build --locked` 编译。服务默认监听 `127.0.0.1:7331`，在当前目录的 `.loom` 持久化数据。部署方通过环境注入 API 测试凭据和模型凭据。以下 PowerShell 示例使用当前环境中的 `LOOM_TEST_TOKEN` 和 `DEEPSEEK_API_KEY`。
+准备稳定版 Rust 和 C 编译器。本机模式使用内置的 SQLite 事件总线，服务默认监听 `127.0.0.1:7331`，在当前目录的 `.loom` 持久化数据。以下 PowerShell 示例使用当前环境中的 `LOOM_TEST_TOKEN` 和 `DEEPSEEK_API_KEY`。
 
 ```powershell
 $env:LOOM_AUTH_JSON = @{ ($env:LOOM_TEST_TOKEN) = @{ owner = 'local' } } | ConvertTo-Json -Compress
-$env:LOOM_REDIS_URL = 'redis://127.0.0.1:6379/'
 cargo run --locked
 ```
+
+### 事件总线与部署
+
+| 部署方式 | 如何配置 |
+| --- | --- |
+| 单机，本地事件总线 | 新安装直接启动即可。API 和多个 worker 可分进程运行，各进程使用同一个本机 `LOOM_HOME`。显式设置 `LOOM_EVENT_BUS=local` 也可固定使用此模式，已有 Redis 环境变量会被忽略。 |
+| Redis Streams | 设置 `LOOM_EVENT_BUS=redis`，连接 Redis 6.2+。默认地址为 `redis://127.0.0.1:6379/`，可用 `LOOM_REDIS_URL` 和 `LOOM_REDIS_STREAM` 指定地址与 Stream。 |
+
+升级时，如果未设置 `LOOM_EVENT_BUS`，已有的非空 `LOOM_REDIS_URL` 或 `LOOM_REDIS_STREAM` 会继续选择 Redis。曾依赖默认 localhost Redis 且未设过这两个变量的部署，升级前可设置 `LOOM_EVENT_BUS=redis` 保留原行为。通过 `GET /health` 的 `event_bus` 字段查看当前进程选择的后端。切换时统一调整 API 和所有 worker，沿用原 HOME。新选用的总线可能重放历史事件，各订阅按原事件 ID 识别已提交的处理结果。[分发、恢复与切换](docs/spec/architecture/runtime.md#event-distribution)
 
 ### 浏览器工作台
 
@@ -94,14 +102,15 @@ CI 通过 `POST /api/tool-calls/{id}/results` 提交回执，使用来源凭据�
 
 ## 验证
 
-启动专用的 Redis 6.2+，安装 Python 3.11+ 和 Node.js 20+。完整验收会启动本机 API 和 worker 进程，调用真实 DeepSeek，并在 CI、模型和下游交付夹具上注入故障。每次运行使用新的证据目录。若使用自定义 Cargo target 目录，以 `LOOM_TEST_BIN` 指向编译得到的可执行文件。
+准备 Python 3.11+ 和 Node.js 20+。以下命令运行 Rust 测试和默认本地总线的第一期验收，启动本机 API 与 worker，调用真实 DeepSeek，并在 CI、模型和下游交付夹具上注入故障。每次运行使用新的证据目录。若使用自定义 Cargo target 目录，以 `LOOM_TEST_BIN` 指向编译得到的可执行文件。
 
 ```powershell
-$env:LOOM_TEST_REDIS_URL = 'redis://127.0.0.1:6379/'
 cargo build --locked
-cargo test --locked -- --include-ignored
+cargo test --locked
 python tests/run_acceptance.py --evidence-dir "$env:TEMP/loom-acceptance-$(New-Guid)"
 ```
+
+单独验证事件分发可运行 `python tests/acceptance_bus.py -v`，使用本机模型夹具。要覆盖 Redis 专项故障，启动专用的 Redis 6.2+，将 `LOOM_TEST_REDIS_URL` 设为其连接地址，再运行同一脚本和 `cargo test --locked -- --include-ignored`。未配置测试 Redis 时，验收报告将 Redis 专项标为跳过。
 
 `DEEPSEEK_API_KEY` 由测试终端的环境提供。测试产物包括每个断言组的结论、可执行文件摘要和脱敏的 HTTP 取证记录。输入框客户端例子在 [examples/composer.mjs](examples/composer.mjs)，上层只在用户点击发送后走正常投递。详细结果见[第一期验收记录](docs/acceptance/results-v1.md)。
 
@@ -111,4 +120,4 @@ python tests/run_acceptance.py --evidence-dir "$env:TEMP/loom-acceptance-$(New-G
 python tests/oi_workspace_e2e.py --ois $env:OIS_BIN --oic $env:OIC_BIN --management $env:OI_MANAGEMENT_MANIFEST --skills $env:OI_SKILLS_MANIFEST --capture $env:OI_COMPUTER_USE_MANIFEST --filesystem $env:OI_FILESYSTEM_MANIFEST --browser
 ```
 
-浏览器测试读取 `LOOM_PLAYWRIGHT_MODULE`、`LOOM_BROWSER_EXECUTABLE`，服务测试沿用 `LOOM_TEST_BIN` 与 `LOOM_TEST_REDIS_URL`。可另加 `--live-text` 并设置 `DEEPSEEK_API_KEY`，让 DeepSeek 在单独会话里查找并读取合成 Skill。截图和视觉请求在本机模型夹具内验证。单独运行 `python tests/workbench_e2e.py` 可验收工作台管理、聊天修改自身、审批与 Note，以及窄屏交互。[跨仓验收脚本](tests/oi_workspace_e2e.py) · [工作台浏览器用例](tests/workbench_browser.cjs)
+浏览器测试读取 `LOOM_PLAYWRIGHT_MODULE`、`LOOM_BROWSER_EXECUTABLE`。服务测试可用 `LOOM_TEST_BIN` 指定可执行文件。可另加 `--live-text` 并设置 `DEEPSEEK_API_KEY`，让 DeepSeek 在单独会话里查找并读取合成 Skill。截图和视觉请求在本机模型夹具内验证。单独运行 `python tests/workbench_e2e.py` 可验收工作台管理、聊天修改自身、审批与 Note，以及窄屏交互。[跨仓验收脚本](tests/oi_workspace_e2e.py) · [工作台浏览器用例](tests/workbench_browser.cjs)

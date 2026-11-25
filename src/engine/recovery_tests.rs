@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{Config, Provider};
+use crate::config::{Config, EventBusConfig, Provider};
 use axum::{Json, Router, routing::post};
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::Mutex};
@@ -15,7 +15,7 @@ fn open_app(home: &Path, endpoint: &str) -> App {
     let cfg = Config {
         home: home.to_owned(),
         bind: String::new(),
-        redis: String::new(),
+        event_bus: EventBusConfig::Local,
         role: "worker".into(),
         workers: 1,
         lease_seconds: 10,

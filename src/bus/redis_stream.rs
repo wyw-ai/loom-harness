@@ -1,11 +1,11 @@
-use super::{BATCH, Batch, BusFuture, Entry, EventBus};
+use super::{BATCH, Batch, BusFuture, Entry, EventBus, OutboxPublisher};
 use anyhow::{Context, Result, ensure};
 use redis::{
     Client, Cmd, FromRedisValue, RedisResult,
     aio::MultiplexedConnection,
     streams::{StreamAutoClaimReply, StreamReadReply},
 };
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 pub struct RedisBus {
@@ -84,7 +84,7 @@ impl RedisBus {
     }
 }
 
-impl EventBus for RedisBus {
+impl OutboxPublisher for RedisBus {
     fn publish<'a>(&'a self, event_id: &'a str) -> BusFuture<'a, ()> {
         Box::pin(async move {
             let mut cmd = redis::cmd("XADD");
@@ -92,6 +92,12 @@ impl EventBus for RedisBus {
             self.query::<String>(&cmd).await?;
             Ok(())
         })
+    }
+}
+
+impl EventBus for RedisBus {
+    fn publisher(self: Arc<Self>) -> Option<Arc<dyn OutboxPublisher>> {
+        Some(self)
     }
 
     fn receive<'a>(

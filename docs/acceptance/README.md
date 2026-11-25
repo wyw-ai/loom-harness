@@ -15,7 +15,7 @@
 | 首次对话、完成后追问、补充与取消、同一 Session 多个 Run、普通 Run 的待决行为 | [会话操作](conversation.md) · [可逐条发送的 HTTP 请求](conversation.http) |
 | 用户图片和结构化交付、主备模型、Note、分支与上下文、Goal、输入框推荐 | [上下文、Goal 与模型](context-and-goal.md) |
 | HOME、Agent 模板、插件配置与修订、自定义 Lua、MCP、混合工具集、创造者实调 | [Agent、插件与工具](agent-and-tools.md) |
-| 报告留档与定向交办、定时和条件投递、工具审批、CI 回执丢失、Redis 重送、执行池与最终送达 | [投递、异步与恢复](recovery-and-dispatch.md) |
+| 报告留档与定向交办、定时和条件投递、工具审批、CI 回执丢失、本地与 Redis 总线重送、执行池与最终送达 | [投递、异步与恢复](recovery-and-dispatch.md) |
 
 ### 首版目标对应哪些用例
 
@@ -28,7 +28,7 @@
 | 模型选择、主备故障切换、图片输入及结构化输出 | C14–C15 |
 | Note 的检索、全文与按行读取、换 worker 后回溯原件 | C12–C13、A02 |
 | 定时、条件和即时投递，历史选材、分支与 section | R01–R03、C01–C04 |
-| Redis Streams 的补发与重复消费，执行池并行与负载对照 | R06–R08、R12 |
+| 本地与 Redis 总线的重启恢复和重复消费，执行池并行与负载对照 | R06–R08、R12 |
 | HOME 双入口、修订冲突、独立 Lua 与 MCP、混合 Toolset | T01、T05–T06、T09–T12 |
 | 模板与角色授权、插件配置隔离、创造者实调、可替换的扩展点 | T02–T04、T07–T08、R12–R13 |
 | 默认模型、澄清及普通 Run 总预算 | A04–A06 |

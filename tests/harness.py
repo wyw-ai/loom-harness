@@ -73,6 +73,13 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def service_environment():
+    env = dict(os.environ)
+    if redis_url := env.get("LOOM_TEST_REDIS_URL"):
+        env["LOOM_REDIS_URL"] = redis_url
+    return env
+
+
 class Instance:
     def __init__(self, env=None, home=None, start=True):
         self.temp = (
@@ -81,7 +88,7 @@ class Instance:
         self.home = Path(home or self.temp.name)
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
-        self.env = dict(os.environ)
+        self.env = service_environment()
         self.env.update(
             {
                 "LOOM_HOME": str(self.home),
@@ -97,9 +104,6 @@ class Instance:
                         "other-source": {"owner":"qa","source":True,"source_id":"other-ci"},
                         "approve-token": {"owner": "qa", "approve": True},
                     }
-                ),
-                "LOOM_REDIS_URL": os.getenv(
-                    "LOOM_TEST_REDIS_URL", "redis://127.0.0.1:6379/"
                 ),
             }
         )

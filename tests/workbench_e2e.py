@@ -1,7 +1,7 @@
 """Run the workbench in Chromium against a fresh HOME and a local model fixture.
 
-Build loom-harness, start Redis (LOOM_TEST_REDIS_URL), and install Playwright
-with Chromium. Run python tests/workbench_e2e.py. LOOM_PLAYWRIGHT_MODULE and
+Build loom-harness and install Playwright with Chromium. Run python
+tests/workbench_e2e.py. LOOM_PLAYWRIGHT_MODULE and
 LOOM_BROWSER_EXECUTABLE optionally select an existing module and browser.
 """
 

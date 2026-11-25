@@ -18,7 +18,7 @@ loom-harness 是一个云端 Agent 与上下文管理服务。外部应用可定
 | 哪些状态必须能恢复？哪些能力适合做成插件？ | [设计原则](principles/design.md) |
 | Run 何时交付、等待或主动续跑？历史压缩后，工具回执如何唤醒原 Run？ | [运行架构与时序](architecture/runtime.md) |
 | 一个逻辑入口如何从默认 1 个 worker 扩容？如何比较 1、2、4 个 worker 的表现？ | [入口与可调执行池](architecture/runtime.md#worker-pool)和[单机压测验收](goals/v1.md#worker-pool-acceptance) |
-| 事件发布前停机怎么补发？Redis Streams 重送同一事件时，两个独立订阅如何各自处理？ | [事件分发与替换总线](architecture/runtime.md#event-distribution)和[分发故障验收](goals/v1.md#event-distribution-acceptance) |
+| 默认本地总线如何恢复？Redis 怎么启用？重送同一事件时，两个独立订阅如何各自处理？ | [事件分发与替换总线](architecture/runtime.md#event-distribution)和[分发故障验收](goals/v1.md#event-distribution-acceptance) |
 | 首个工具回执丢失后，换 worker 怎样找回原作业？ | [工具恢复能力](reference/contracts.md#外部工具的恢复能力) |
 | 大段文本工具结果怎样保存为 Note？Session 和 Event 怎样按同一引用读取日志原文或指定行？ | [Note 的写入、检索与读取](reference/contracts.md#notes)和[日志回读验收](goals/v1.md#notes-acceptance) |
 | 聊天应用怎样取得输入框推荐？用户先发了新消息时如何处理？ | [上层调用契约](reference/contracts.md#输入框推荐)、[宿主只读采样](architecture/runtime.md#输入框推荐的只读采样)和[验收场景](goals/v1.md#输入框推荐) |

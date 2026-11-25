@@ -9,6 +9,7 @@ import subprocess
 import time
 import unittest
 
+from acceptance_bus import REDIS_SKIP_REASON
 from harness import ROOT
 
 
@@ -20,13 +21,16 @@ class Results(unittest.TextTestResult):
 
     def stopTest(self, test):
         super().stopTest(test)
-        self.checks.append(
-            {
-                "test": test.id(),
-                "seconds": round(time.monotonic() - self.started, 3),
-                "passed": self.wasSuccessfulFor(test),
-            }
-        )
+        check = {
+            "test": test.id(),
+            "seconds": round(time.monotonic() - self.started, 3),
+            "passed": self.wasSuccessfulFor(test),
+        }
+        for item, reason in self.skipped:
+            if item is test:
+                check["skipped"] = reason
+                break
+        self.checks.append(check)
 
     def wasSuccessfulFor(self, test):
         return all(
@@ -44,9 +48,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-dir", type=Path)
     args = parser.parse_args()
-    for name in ("DEEPSEEK_API_KEY", "LOOM_TEST_REDIS_URL"):
-        if not os.getenv(name):
-            parser.error(f"{name} is required for the complete run")
+    if not os.getenv("DEEPSEEK_API_KEY"):
+        parser.error("DEEPSEEK_API_KEY is required for the complete run")
     default = (
         ROOT
         / "target"
@@ -86,9 +89,10 @@ def main():
             ),
             encoding="utf-8",
         )
+    unexpected_skips = any(reason != REDIS_SKIP_REASON for _, reason in results.skipped)
     return (
         0
-        if results.wasSuccessful() and not results.skipped and ui.returncode == 0
+        if results.wasSuccessful() and not unexpected_skips and ui.returncode == 0
         else 1
     )
 

@@ -1,7 +1,6 @@
 """Run the catalog acceptance paths against a built loom-harness and local HTTP peers.
 
     cargo build
-    # Set LOOM_TEST_REDIS_URL to a running Redis instance (default localhost:6379).
     python tests/acceptance_catalog.py
 
 No API keys are needed. The two bearer credentials are random, process-local and
@@ -24,8 +23,9 @@ import threading
 import time
 import unittest
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+
+from harness import service_environment
 
 
 def port():
@@ -220,15 +220,12 @@ class CatalogAcceptance(unittest.TestCase):
         }
         cls.address = "127.0.0.1:%s" % port()
         cls.env = {
-            **os.environ,
+            **service_environment(),
             "LOOM_HOME": str(cls.home),
             "LOOM_BIND": cls.address,
             "LOOM_ROLE": "all",
             "LOOM_WORKERS": "6",
             "LOOM_NOTE_THRESHOLD": "900",
-            "LOOM_REDIS_URL": os.environ.get(
-                "LOOM_TEST_REDIS_URL", "redis://127.0.0.1:6379/"
-            ),
             "LOOM_AUTH_JSON": json.dumps(
                 {
                     v: {
@@ -957,16 +954,6 @@ class CatalogAcceptance(unittest.TestCase):
         )
 
     def test_06_t12_lost_first_receipt_after_worker_replacement(self):
-        redis = urlsplit(self.env["LOOM_REDIS_URL"])
-        try:
-            with socket.create_connection(
-                (redis.hostname, redis.port or 6379), timeout=2
-            ):
-                pass
-        except OSError as err:
-            self.fail(
-                f"T12 needs the real event bus. Set LOOM_TEST_REDIS_URL to a running Redis instance ({type(err).__name__})."
-            )
         self.peer.release = threading.Event()
         self.peer.submissions, self.peer.lookups, self.peer.jobs = {}, {}, {}
         self.admin(

@@ -67,7 +67,9 @@ async fn handle(
 ) -> Result<Response, ApiError> {
     let path = uri.path();
     if path == "/health" && method == Method::GET {
-        return Ok(Json(json!({"status":"ok"})).into_response());
+        return Ok(
+            Json(json!({"status":"ok","event_bus":app.cfg.event_bus.name()})).into_response(),
+        );
     }
     let token = headers
         .get("authorization")

@@ -9,7 +9,7 @@ mod engine;
 mod store;
 
 use anyhow::Result;
-use config::Config;
+use config::{Config, EventBusConfig};
 use std::{sync::Arc, time::Duration};
 
 #[derive(Clone)]
@@ -41,9 +41,17 @@ async fn main() -> Result<()> {
         suggestion_slots: Arc::new(tokio::sync::Semaphore::new(4)),
     };
     let instance = uuid::Uuid::new_v4().simple().to_string();
-    let stream = std::env::var("LOOM_REDIS_STREAM")
-        .unwrap_or(format!("loom:{}:events", app.db.instance_id()?));
-    let bus = Arc::new(bus::RedisBus::new(&cfg.redis, &stream)?);
+    let bus: Arc<dyn bus::EventBus> = match &cfg.event_bus {
+        EventBusConfig::Local => Arc::new(bus::LocalBus::new(app.db.clone())),
+        EventBusConfig::Redis { url, stream } => {
+            let stream = match stream {
+                Some(name) => name.clone(),
+                None => format!("loom:{}:events", app.db.instance_id()?),
+            };
+            Arc::new(bus::RedisBus::new(url, &stream)?)
+        }
+    };
+    println!("loom-harness event bus: {}", cfg.event_bus.name());
     let _bus = bus::spawn_bus(
         app.db.clone(),
         bus.clone(),

@@ -10,6 +10,7 @@ use uuid::Uuid;
 mod delivery;
 mod dispatch;
 mod extensions;
+mod local_bus;
 mod prompt;
 mod replies;
 mod stream;
@@ -267,6 +268,10 @@ impl Store {
               WHERE kind='event' AND json_extract(doc,'$.source')='loom' AND json_extract(doc,'$.type') IN ('run.completed','run.failed','run.cancelled');
             CREATE TABLE IF NOT EXISTS consumed(consumer TEXT NOT NULL,event_id TEXT NOT NULL,
               PRIMARY KEY(consumer,event_id));
+            CREATE TABLE IF NOT EXISTS local_bus_groups(consumer TEXT PRIMARY KEY, last_claimed INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS local_bus_pending(consumer TEXT NOT NULL, seq INTEGER NOT NULL,
+               lease TEXT NOT NULL, expires_ms INTEGER NOT NULL, PRIMARY KEY(consumer,seq));
+            CREATE INDEX IF NOT EXISTS local_bus_expiry ON local_bus_pending(consumer,expires_ms,seq);
             CREATE TABLE IF NOT EXISTS subscription_results(consumer TEXT NOT NULL,event_id TEXT NOT NULL,
                result TEXT NOT NULL,PRIMARY KEY(consumer,event_id));
             CREATE TABLE IF NOT EXISTS replyq(seq INTEGER PRIMARY KEY,reply_id TEXT NOT NULL UNIQUE,

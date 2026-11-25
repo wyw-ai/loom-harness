@@ -20,7 +20,7 @@
 
 Rust 宿主通过 `PluginProvider` 加载和调用扩展，首版使用 `LuaPluginProvider`。官方与第三方插件共用扩展机制。宿主定义每个扩展点的输入、输出和错误，构造本次调用上下文。一个观察结果的插件和一个负责提交本次模型响应的提供方承担不同职责，宿主须能选定谁的返回值驱动 Run。
 
-插件启用时通过统一入口 `plugin:subscribe` 声明事件类型和范围。宿主按实例授权分发，以实例内稳定的订阅 ID 分别记录消费进度，持久保存处理结果及待执行动作后确认消费。宿主首版默认使用 Redis Streams，替换消息总线时插件沿用同一入口。向 Agent 或 Session 定向投递另行登记 EventDelivery，各目标的收件结果与各订阅的消费进度分别查询。[事件分发约定](../architecture/runtime.md#event-distribution) · [中断与重送验收](../goals/v1.md#event-distribution-acceptance)
+插件启用时通过统一入口 `plugin:subscribe` 声明事件类型和范围。宿主按实例授权分发，以实例内稳定的订阅 ID 分别记录消费进度，持久保存处理结果及待执行动作后确认消费。宿主默认使用 SQLite 本地事件总线，选择 Redis Streams 时插件沿用同一入口。向 Agent 或 Session 定向投递另行登记 EventDelivery，各目标的收件结果与各订阅的消费进度分别查询。[事件分发约定](../architecture/runtime.md#event-distribution) · [中断与重送验收](../goals/v1.md#event-distribution-acceptance)
 
 | 扩展能力 | 首版契约 |
 | --- | --- |
