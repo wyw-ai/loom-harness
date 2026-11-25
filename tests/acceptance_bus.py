@@ -1,4 +1,4 @@
-"""R06/R07/R12: real HTTP, SQLite and Redis Streams. Set LOOM_TEST_REDIS_URL."""
+"""Exercise the local bus over HTTP. Redis transport fault cases use LOOM_TEST_REDIS_URL."""
 
 import io
 import json
@@ -13,8 +13,12 @@ from contextlib import closing, contextmanager
 from urllib.parse import urlsplit
 
 from acceptance_catalog import Peers, create_peer
-from acceptance_recovery import eventually
+from acceptance_recovery import eventually, worker_processes
 from harness import Instance
+
+
+REDIS_SKIP_REASON = "set LOOM_TEST_REDIS_URL to an isolated Redis 6.2+"
+requires_redis = unittest.skipUnless(os.environ.get("LOOM_TEST_REDIS_URL"), REDIS_SKIP_REASON)
 
 
 def frame(stream):
@@ -146,9 +150,10 @@ class ReportPeer(Peers):
 
 
 @contextmanager
-def deployment():
-    stream = "loom:qa:bus:" + uuid.uuid4().hex
-    gate = RedisGate(os.environ["LOOM_TEST_REDIS_URL"], stream)
+def deployment(*, redis=False, role="all"):
+    gate = None
+    if redis:
+        gate = RedisGate(os.environ["LOOM_TEST_REDIS_URL"], "loom:qa:bus:" + uuid.uuid4().hex)
     peer = create_peer(ReportPeer)
     peer.tools["/ci"] = ["submit"]
     thread = threading.Thread(target=peer.serve_forever, daemon=True)
@@ -157,20 +162,27 @@ def deployment():
     try:
         with Instance(
             env={
-                "LOOM_REDIS_STREAM": stream,
-                "LOOM_REDIS_URL": gate.start(),
+                "LOOM_ROLE": role,
                 "LOOM_DEFAULT_MODEL": "test",
                 "LOOM_MODEL_ROUTES": json.dumps(
                     {"test": {"base_url": url + "/v1", "model": "fixture"}}
                 ),
-            }
+            },
+            start=False,
         ) as app:
+            for name in ("LOOM_EVENT_BUS", "LOOM_REDIS_URL", "LOOM_REDIS_STREAM"):
+                app.env.pop(name, None)
+            if gate:
+                app.env.update(LOOM_REDIS_STREAM=gate.stream, LOOM_REDIS_URL=gate.start())
+            app.start()
+            assert app.api("GET", "/health")["event_bus"] == ("redis" if gate else "local")
             yield app, gate, peer, url
     finally:
         peer.shutdown()
         peer.server_close()
         thread.join()
-        gate.close()
+        if gate:
+            gate.close()
 
 
 def install(app, instance, source, typ):
@@ -265,11 +277,66 @@ def finish(test, app, peer, rid, cid, eid):
     test.assertEqual(run["id"], rid)
 
 
-@unittest.skipUnless(
-    os.environ.get("LOOM_TEST_REDIS_URL"),
-    "set LOOM_TEST_REDIS_URL to an isolated Redis 6.2+",
-)
 class BusAcceptance(unittest.TestCase):
+    @requires_redis
+    def test_switch_transports_on_the_same_home(self):
+        stream = "loom:qa:switch:" + uuid.uuid4().hex
+        gate = RedisGate(os.environ["LOOM_TEST_REDIS_URL"], stream)
+        url = gate.start()
+        try:
+            with Instance(start=False) as app:
+                app.env.update(LOOM_EVENT_BUS="local", LOOM_REDIS_URL=url, LOOM_REDIS_STREAM=stream)
+                app.start()
+                self.assertEqual(app.api("GET", "/health")["event_bus"], "local")
+                install(app, "before-switch", "ci", "job.finished")
+
+                def publish():
+                    event = app.api(
+                        "POST", "events", {"source": "ci", "type": "job.finished"}, token="source-token"
+                    )
+                    return event["id"]
+
+                def observe(instance, event):
+                    result = eventually(lambda: audit(app, instance, event), bool)
+                    self.assertEqual(result["result"], {"observed": event})
+
+                def original_result_row(event):
+                    return query(
+                        app,
+                        """SELECT rowid FROM subscription_results WHERE event_id=?
+                           AND json_extract(result, '$.plugin_instance')='before-switch'""",
+                        event,
+                    )[0][0]
+
+                local_event = publish()
+                observe("before-switch", local_event)
+                local_row = original_result_row(local_event)
+                self.assertEqual(gate.references(local_event), [])
+
+                app.stop()
+                del app.env["LOOM_EVENT_BUS"]  # Existing deployments select Redis by URL.
+                app.start()
+                self.assertEqual(app.api("GET", "/health")["event_bus"], "redis")
+                eventually(lambda: gate.references(local_event), bool)
+                redis_event = publish()
+                observe("before-switch", redis_event)
+                redis_row = original_result_row(redis_event)
+
+                app.stop()
+                app.env["LOOM_EVENT_BUS"] = "local"
+                app.start()
+                self.assertEqual(app.api("GET", "/health")["event_bus"], "local")
+                install(app, "after-switch", "ci", "job.finished")
+                after_switch = publish()
+                for event in (local_event, redis_event, after_switch):
+                    for instance in ("before-switch", "after-switch"):
+                        observe(instance, event)
+                self.assertEqual(original_result_row(local_event), local_row)
+                self.assertEqual(original_result_row(redis_event), redis_row)
+                self.assertEqual(gate.references(after_switch), [])
+        finally:
+            gate.close()
+
     def test_r05_named_receipt_source_is_bound_to_the_original_tool(self):
         from urllib.error import HTTPError
         with deployment() as (app, _, peer, url):
@@ -287,8 +354,79 @@ class BusAcceptance(unittest.TestCase):
             self.assertEqual(len(app.api("GET",f"runs/{rid}/model-calls")),2)
             self.assertEqual(peer.counts["ci.submit"],1)
 
+    def test_committed_receipt_survives_restart_and_two_new_workers(self):
+        with deployment(role="api") as (app, _, peer, url):
+            with worker_processes(app, 1):
+                rid, cid = waiting(app, peer, url)
+            # Refuse the first claim. The API can still commit the event and outbox
+            # entry, but neither group can see it until we lift the fault.
+            with closing(sqlite3.connect(app.home / "state" / "loom.db")) as db:
+                db.execute("""
+                    CREATE TRIGGER delay_ci_receipt BEFORE INSERT ON local_bus_pending
+                    WHEN EXISTS (
+                        SELECT 1 FROM outbox JOIN objects ON objects.id=outbox.event_id
+                        WHERE outbox.seq=NEW.seq AND objects.kind='event'
+                        AND json_extract(objects.doc,'$.type')='tool.result_received'
+                    )
+                    BEGIN SELECT RAISE(ABORT,'injected claim failure'); END
+                """)
+                eid = report(app, cid)
+                self.assertEqual(report(app, cid), eid)
+                self.assertEqual(
+                    query(app, "SELECT 1 FROM outbox WHERE event_id=?", eid), [(1,)]
+                )
+                self.assertIsNone(audit(app, "ci-tools", eid))
+                self.assertEqual(query(app, "SELECT 1 FROM consumed WHERE event_id=?", eid), [])
+                self.assertEqual(app.api("GET", f"runs/{rid}")["status"], "waiting")
+                self.assertEqual(len(peer.inputs), 1)
+                app.stop()
+                db.execute("DROP TRIGGER delay_ci_receipt")
+            app.start()
+            with worker_processes(app, 2):
+                finish(self, app, peer, rid, cid, eid)
+                self.assertEqual(
+                    query(app, "SELECT COUNT(*) FROM consumed WHERE event_id=?", eid), [(2,)]
+                )
+
+    def test_redelivery_after_runtime_commit_and_lost_ack(self):
+        with deployment() as (app, _, peer, url):
+            rid, cid = waiting(app, peer, url)
+            with closing(sqlite3.connect(app.home / "state" / "loom.db")) as db:
+                db.execute("""
+                    CREATE TRIGGER delay_ci_ack BEFORE DELETE ON local_bus_pending
+                    WHEN OLD.consumer='runtime' AND EXISTS (
+                        SELECT 1 FROM outbox JOIN objects ON objects.id=outbox.event_id
+                        WHERE outbox.seq=OLD.seq AND objects.kind='event'
+                        AND json_extract(objects.doc,'$.type')='tool.result_received'
+                    )
+                    BEGIN SELECT RAISE(ABORT,'injected acknowledgement failure'); END
+                """)
+                eid = report(app, cid)
+                finish(self, app, peer, rid, cid, eid)
+                seq, = query(app, "SELECT seq FROM outbox WHERE event_id=?", eid)[0]
+                pending = "SELECT 1 FROM local_bus_pending WHERE consumer='runtime' AND seq=?"
+                self.assertEqual(query(app, pending, seq), [(1,)])
+                app.stop()
+                db.execute("DROP TRIGGER delay_ci_ack")
+                # Fast-forward this abandoned receipt's lease at the crash boundary.
+                db.execute(
+                    "UPDATE local_bus_pending SET expires_ms=0 WHERE consumer='runtime' AND seq=?",
+                    (seq,),
+                )
+                db.commit()
+            app.env["LOOM_ROLE"] = "api"
+            app.start()
+            with worker_processes(app, 2):
+                eventually(lambda: query(app, pending, seq), lambda rows: not rows)
+                finish(self, app, peer, rid, cid, eid)
+                self.assertEqual(
+                    query(app, "SELECT COUNT(*) FROM consumed WHERE event_id=?", eid), [(2,)]
+                )
+
+
+    @requires_redis
     def test_r06_stop_after_sqlite_commit_before_xadd(self):
-        with deployment() as (app, gate, peer, url):
+        with deployment(redis=True) as (app, gate, peer, url):
             rid, cid = waiting(app, peer, url)
 
             def before_report_xadd(cmd):
@@ -340,8 +478,9 @@ class BusAcceptance(unittest.TestCase):
                 )
             )
 
+    @requires_redis
     def test_r07_stop_after_consumer_commit_before_xack(self):
-        with deployment() as (app, gate, peer, url):
+        with deployment(redis=True) as (app, gate, peer, url):
             rid, cid = waiting(app, peer, url)
             group = json.dumps(
                 [
@@ -425,8 +564,15 @@ class BusAcceptance(unittest.TestCase):
                 )
             )
 
+    @requires_redis
     def test_r12_plugin_scope_redelivery_and_disable(self):
-        with deployment() as (app, gate, _, _):
+        self.check_plugin_subscription(redis=True)
+
+    def test_local_plugin_scope_and_disable(self):
+        self.check_plugin_subscription(redis=False)
+
+    def check_plugin_subscription(self, *, redis):
+        with deployment(redis=redis) as (app, gate, _, _):
             install(app, "audit-ci", "ci", "job.finished")
             create = lambda source: app.api(
                 "POST",
@@ -434,10 +580,8 @@ class BusAcceptance(unittest.TestCase):
                 {"source": source, "type": "job.finished"},
                 token="source-token",
             )["id"]
-            eid, excluded = create("ci"), create("docs")
+            excluded, eid = create("docs"), create("ci")
             eventually(lambda: audit(app, "audit-ci", eid), bool)
-            duplicate = gate.redis("XADD", gate.stream, "*", "event_id", eid).decode()
-            self.assertIn(duplicate, gate.references(eid))
             group = json.dumps(
                 [
                     "subscription",
@@ -459,7 +603,10 @@ class BusAcceptance(unittest.TestCase):
                     for r in rows
                 )
 
-            eventually(acked, bool)
+            if gate:
+                duplicate = gate.redis("XADD", gate.stream, "*", "event_id", eid).decode()
+                self.assertIn(duplicate, gate.references(eid))
+                eventually(acked, bool)
             self.assertEqual(audit(app, "audit-ci", eid)["result"], {"observed": eid})
             self.assertEqual(
                 query(
@@ -491,7 +638,8 @@ class BusAcceptance(unittest.TestCase):
                     {
                         "case": "R12",
                         "event": eid,
-                        "stream_entries": gate.references(eid),
+                        "backend": "redis" if gate else "local",
+                        **({"stream_entries": gate.references(eid)} if gate else {}),
                         "audit": 1,
                         "out_of_scope": 0,
                         "after_disable": 0,

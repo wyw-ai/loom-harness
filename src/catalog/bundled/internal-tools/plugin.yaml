@@ -1,0 +1,19 @@
+apiVersion: loom/v1alpha1
+kind: PluginPackage
+id: internal-tools
+version: "1.0.0"
+entrypoint: plugin.lua
+description: Discover OI Services and expose their published actions as direct tools.
+settings_schema:
+  type: object
+  additionalProperties: false
+  required: [base_url, catalog_service, catalog_credential_ref]
+  properties:
+    base_url: {type: string, minLength: 1}
+    catalog_service: {type: string, minLength: 1}
+    catalog_credential_ref: {type: string, minLength: 1}
+    consumer_credential_ref: {type: string, minLength: 1}
+    service_credentials:
+      type: object
+      additionalProperties: {type: string, minLength: 1}
+    refresh_interval_secs: {type: integer, minimum: 1, maximum: 86400}

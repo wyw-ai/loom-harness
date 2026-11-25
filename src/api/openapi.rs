@@ -1,6 +1,9 @@
 use serde_json::{Value, json};
 
 const PUBLIC: &[(&str, &str)] = &[
+    ("identity", "get"),
+    ("sessions/{id}/notes", "get"),
+    ("sessions/{id}/notes/{note_id}", "get"),
     ("models", "get"),
     ("agent-templates", "get"),
     ("agents", "get post"),
@@ -9,6 +12,7 @@ const PUBLIC: &[(&str, &str)] = &[
     ("sessions", "get post"),
     ("sessions/{id}", "get"),
     ("sessions/{id}/runs", "get"),
+    ("sessions/{id}/usage", "get"),
     ("sessions/{id}/context/items", "get"),
     ("sessions/{id}/context/previews", "post"),
     ("sessions/{id}/branches", "post"),
@@ -21,6 +25,7 @@ const PUBLIC: &[(&str, &str)] = &[
     ("runs/{id}", "get"),
     ("runs/{id}/stream", "get"),
     ("runs/{id}/steps", "get"),
+    ("runs/{id}/usage", "get"),
     ("runs/{id}/tools", "get"),
     ("runs/{id}/model-calls", "get"),
     ("runs/{id}/tool-calls", "get"),
@@ -53,7 +58,13 @@ const ADMIN: &[(&str, &str)] = &[
     ("settings/{instance}/schema", "get"),
     ("catalog/apply", "post"),
     ("catalog/diagnostics", "get"),
-    ("catalog/tools", "get"),
+    ("catalog/packages", "get"),
+    ("catalog/tools", "get post"),
+    ("catalog/tools/{id}", "patch"),
+    ("catalog/toolsets", "get post"),
+    ("catalog/toolsets/{id}", "patch"),
+    ("plugins/{instance}/refresh", "post"),
+    ("plugins/{instance}/discovery", "get"),
     ("catalog/tools/{tool}/versions/{revision}", "get"),
     ("mcp/connections", "get post"),
     ("mcp/connections/{instance}/{connection}", "get patch"),
@@ -106,6 +117,12 @@ pub(super) fn document(mut paths: Value, who: &crate::config::Identity) -> Value
                 };
                 if let Some((name, description)) = filter {
                     op["parameters"] = json!([{"name":name,"in":"query","schema":{"type":"string"},"description":description}]);
+                }
+                if path == "sessions" {
+                    op["parameters"] = json!([
+                        {"name":"agent_id","in":"query","schema":{"type":"string"},"description":"Filter sessions by Agent ID."},
+                        {"name":"include","in":"query","schema":{"type":"string","enum":["preview"]},"description":"Include first_user_preview for untitled sessions with user text. The first message is flattened to at most 48 Unicode characters."}
+                    ]);
                 }
             }
             if path == "runs/{id}/stream" {

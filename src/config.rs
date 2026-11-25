@@ -38,7 +38,7 @@ impl Provider {
 pub struct Config {
     pub home: PathBuf,
     pub bind: String,
-    pub redis: String,
+    pub event_bus: EventBusConfig,
     pub role: String,
     pub workers: usize,
     pub lease_seconds: i64,
@@ -49,6 +49,34 @@ pub struct Config {
     pub note_threshold: usize,
     pub note_budget: usize,
     pub notification_targets: Vec<String>,
+}
+
+pub enum EventBusConfig {
+    Local,
+    Redis { url: String, stream: Option<String> },
+}
+
+impl EventBusConfig {
+    fn select(backend: Option<&str>, url: Option<&str>, stream: Option<&str>) -> Result<Self> {
+        let url = url.map(str::trim).filter(|value| !value.is_empty());
+        let stream = stream.filter(|value| !value.trim().is_empty());
+        match backend.map(str::trim).filter(|value| !value.is_empty()) {
+            Some("local") => Ok(Self::Local),
+            None if url.is_none() && stream.is_none() => Ok(Self::Local),
+            Some("redis") | None => Ok(Self::Redis {
+                url: url.unwrap_or("redis://127.0.0.1:6379/").to_owned(),
+                stream: stream.map(str::to_owned),
+            }),
+            Some(_) => bail!("LOOM_EVENT_BUS must be local or redis"),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Redis { .. } => "redis",
+        }
+    }
 }
 
 fn value(key: &str, default: &str) -> String {
@@ -128,7 +156,11 @@ impl Config {
             tokens,
             models,
             default_model,
-            redis: value("LOOM_REDIS_URL", "redis://127.0.0.1:6379/"),
+            event_bus: EventBusConfig::select(
+                env::var("LOOM_EVENT_BUS").ok().as_deref(),
+                env::var("LOOM_REDIS_URL").ok().as_deref(),
+                env::var("LOOM_REDIS_STREAM").ok().as_deref(),
+            )?,
             workers: number("LOOM_WORKERS", 1)?,
             lease_seconds: i64::try_from(number("LOOM_WORK_LEASE_SECONDS", 45)?)?.clamp(2, 3600),
             max_rounds: number("LOOM_MAX_ROUNDS", 24)?,
@@ -136,5 +168,28 @@ impl Config {
             note_budget: number("LOOM_NOTE_READ_BUDGET", 65536)?,
             notification_targets: serde_json::from_str(&value("LOOM_NOTIFICATION_TARGETS", "[]"))?,
         })
+    }
+}
+
+#[cfg(test)]
+mod bus_selection_tests {
+    use super::EventBusConfig;
+
+    #[test]
+    fn local_is_default_and_explicit_selection_wins_over_legacy_settings() {
+        for (backend, url, stream, expected) in [
+            (None, None, None, "local"),
+            (None, Some(""), Some(" "), "local"),
+            (None, Some("redis://host/"), None, "redis"),
+            (None, None, Some("legacy-stream"), "redis"),
+            (Some("local"), Some("unreachable"), Some("old"), "local"),
+            (Some("redis"), None, None, "redis"),
+        ] {
+            assert_eq!(
+                EventBusConfig::select(backend, url, stream).unwrap().name(),
+                expected
+            );
+        }
+        assert!(EventBusConfig::select(Some("typo"), None, None).is_err());
     }
 }

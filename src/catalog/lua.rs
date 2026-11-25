@@ -216,12 +216,14 @@ pub(super) fn declarations(code: &str) -> R<(Vec<Value>, Vec<Value>)> {
             "output_schema",
             "exposure",
             "requires_approval",
+            "webui",
         ] {
             let v: mlua::Value = t.get(key).map_err(err)?;
             if !v.is_nil() {
                 d[key] = lua.from_value(v).map_err(err)?
             }
         }
+        super::resources::normalize_tool_webui(&mut d)?;
         out.push(d);
     }
     for entry in sets.pairs::<String, Table>() {

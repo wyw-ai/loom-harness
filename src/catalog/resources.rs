@@ -13,7 +13,34 @@ fn component(s: &str) -> String {
 pub(super) fn scoped(inst: &str, local: &str) -> String {
     format!("{}.{}", component(inst), component(local))
 }
-fn descriptor(mut t: Value, source: &str, name: &str) -> R<Value> {
+pub(super) fn normalize_tool_webui(tool: &mut Value) -> R<()> {
+    let spec = tool
+        .as_object_mut()
+        .ok_or("invalid: expected tool definition")?;
+    let Some(config) = spec.get_mut("webui") else {
+        return Ok(());
+    };
+    if config.is_null() || config.as_object().is_some_and(|obj| obj.is_empty()) {
+        spec.remove("webui");
+        return Ok(());
+    }
+    let config = config
+        .as_object_mut()
+        .ok_or("invalid: expected webui object")?;
+    if let Some(suggestion) = config.get_mut("suggestion") {
+        for (field, limit) in [("label", 64), ("prompt", 1200)] {
+            let text = suggestion[field].as_str().unwrap_or("").trim();
+            if text.is_empty() || text.encode_utf16().count() > limit {
+                return Err(format!(
+                    "invalid: webui.suggestion.{field} must be 1 to {limit} characters"
+                ));
+            }
+            suggestion[field] = json!(text);
+        }
+    }
+    Ok(())
+}
+pub(super) fn descriptor(mut t: Value, source: &str, name: &str) -> R<Value> {
     if !t.is_object() {
         return Err("invalid: invalid tool declaration".into());
     }
@@ -195,26 +222,52 @@ impl Catalog {
         let k = format!("{key}/{ver}");
         let d = json!({"id":key,"version":ver,"manifest":manifest,"code":code,"templates":templates,"tools":tools,"toolsets":sets,"routes":routes,"sections":sections});
         if let Ok(old) = self.get("package", &k) {
-            if old["revision"] != sha(&d) {
+            let revision = sha(&d);
+            if old["revision"] == revision {
+                return Ok(old);
+            }
+            // Older hosts stored the same package source without its derived WebUI metadata.
+            // Compare the entire previous representation before updating its catalog revision.
+            let mut previous = d.clone();
+            for tool in previous["tools"]
+                .as_array_mut()
+                .expect("tool declarations array")
+            {
+                tool.as_object_mut()
+                    .expect("tool declaration")
+                    .remove("webui");
+            }
+            if old["revision"] != sha(&previous) {
                 return Err("conflict: package version is immutable".into());
             }
-            return Ok(old);
+            return self
+                .save("package", &k, d, old["revision"].as_str(), None)
+                .or_else(|e| {
+                    // Another worker may finish the same upgrade first.
+                    self.get("package", &k)
+                        .ok()
+                        .filter(|current| current["revision"] == revision)
+                        .ok_or(e)
+                });
         }
         self.save("package", &k, d, Some(""), None)
     }
     fn load_home_tool(&self, dir: &Path) -> R<()> {
         let key = leaf(dir)?;
-        let src =
-            serde_yaml::from_str::<Value>(&self.file(&dir.join("tool.yaml"))?).map_err(err)?;
-        if src["id"] != key {
-            return Err("invalid: tool ID does not match directory".into());
-        }
-        let code = self.file(&dir.join(string(&src, "handler")?))?;
-        lua::validate(&code)?;
         let name = scoped("home", key);
-        let mut t = descriptor(src, "home", &name)?;
-        t["code"] = json!(code);
-        self.save("tool", &name, t, None, None)?;
+        self.save_with("tool", &name, None, None, || {
+            let mut src =
+                serde_yaml::from_str::<Value>(&self.file(&dir.join("tool.yaml"))?).map_err(err)?;
+            if src["id"] != key {
+                return Err("invalid: tool ID does not match directory".into());
+            }
+            let code = self.file(&dir.join(string(&src, "handler")?))?;
+            lua::validate(&code)?;
+            normalize_tool_webui(&mut src)?;
+            let mut t = descriptor(src, "home", &name)?;
+            t["code"] = json!(code);
+            Ok(t)
+        })?;
         Ok(())
     }
     fn instance_tools(&self, inst: &Value) -> R<()> {
@@ -267,6 +320,20 @@ impl Catalog {
                 return Ok(false);
             }
         }
+        if item["source"] == "oi" {
+            if self.get("settings", string(item, "instance")?)?["revision"]
+                != item["settings_revision"]
+            {
+                return Ok(false);
+            }
+            if item["toolset"].is_string() {
+                let set = self.get("toolset", string(item, "toolset")?);
+                return Ok(set.is_ok_and(|s| {
+                    s["ready"] == true && includes(&s["members"], item["id"].as_str().unwrap_or(""))
+                }));
+            }
+            return Ok(item["ready"] == true);
+        }
         if item["source"] == "mcp" {
             let source = self.get("connection", string(item, "connection_key")?)?;
             let cache = self.get("discovery", string(item, "connection_key")?);
@@ -281,6 +348,7 @@ impl Catalog {
         Ok(true)
     }
     pub(super) fn reload(&self) -> R<()> {
+        self.reload_home_sets()?;
         for pkg in dirs(&self.resource("packages")?)? {
             if !pkg.is_dir() {
                 continue;
@@ -492,6 +560,16 @@ impl Catalog {
             }
             "plugins.install" if plugin_ok => self.install(key, string(&args, "version")?, &args),
             "plugins.set_enabled" if plugin_ok => {
+                if args["package"] == "internal-tools"
+                    || key == "internal-tools"
+                    || self
+                        .get("plugin", key)
+                        .is_ok_and(|i| i["package"] == "internal-tools")
+                {
+                    return Err(
+                        "forbidden: OIS connection management requires an administrator".into(),
+                    );
+                }
                 let mut p = json!({"enabled":args["enabled"].as_bool().ok_or("invalid: enabled")?});
                 let create = self.get("plugin", key).is_err();
                 if create {
@@ -514,7 +592,11 @@ impl Catalog {
                 self.patch_agent(owner, false, agent, args["patch"].clone())
             }
             "settings.get" if plugin_ok => self.get("settings", key),
-            "settings.update" if plugin_ok => self.settings_write(key, &args["settings"]),
+            "settings.update"
+                if plugin_ok && self.get("plugin", key)?["package"] != "internal-tools" =>
+            {
+                self.settings_write(key, &args["settings"])
+            }
             "sessions.history" | "events.search" | "write_note" | "search_notes" | "read_note"
             | "context.preview" => Err("runtime: session context required".into()),
             _ => Err("forbidden: target outside delegated scope".into()),
@@ -565,6 +647,8 @@ impl Catalog {
             return Err("forbidden: catalog administration".into());
         }
         match (method, p) {
+            ("POST", ["plugins", instance, "refresh"]) => self.refresh_oi(instance).await,
+            ("GET", ["plugins", instance, "discovery"]) => self.oi_status(instance),
             ("GET", ["plugins"]) => Ok(json!(self.all("plugin")?)),
             ("POST", ["plugins"]) => self.plugin_write(string(&body, "id")?, &body, true),
             ("GET", ["plugins", p]) => self.get("plugin", id(p)?),
@@ -650,5 +734,37 @@ impl Catalog {
             Some(body["expected_revision"].as_str().unwrap_or(&rev)),
             Some(&p),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_package_can_recover_its_declared_suggestion_without_changing_source() {
+        let home = tempfile::tempdir().unwrap();
+        let catalog = Catalog::open(home.path()).unwrap();
+        let code = "register_tool({id='read',webui={suggestion={label=' Read ',prompt=' Read it '}},handler=function() return 1 end})";
+        let old = json!({
+            "id":"hints", "version":"1", "manifest":{"id":"hints","version":"1","entrypoint":"plugin.lua"},
+            "code":code, "templates":[], "tools":[{"id":"read"}],
+            "toolsets":[], "routes":[], "sections":[]
+        });
+        catalog
+            .save("package", "hints/1", old, Some(""), None)
+            .unwrap();
+        let request = json!({"code":code});
+        let upgraded = catalog.install("hints", "1", &request).unwrap();
+        assert_eq!(
+            upgraded["tools"][0]["webui"]["suggestion"],
+            json!({"label":"Read","prompt":"Read it"})
+        );
+        assert_eq!(catalog.install("hints", "1", &request).unwrap(), upgraded);
+        let changed = json!({"code":code.replace("Read it","Run it")});
+        assert_eq!(
+            catalog.install("hints", "1", &changed).unwrap_err(),
+            "conflict: package version is immutable"
+        );
     }
 }

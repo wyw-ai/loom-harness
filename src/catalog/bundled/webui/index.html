@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fafaf7">
+  <title>Loom 工作台</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="chat-flow.css">
+  <link rel="stylesheet" href="desk-workspace.css">
+  <script src="richtext.js" defer></script>
+  <script src="usage.js" defer></script>
+  <script src="shell.js" defer></script>
+  <script src="desk.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#prompt">跳到消息输入框</a>
+  <div class="workspace">
+    <aside id="sidebar" aria-label="工作台导航">
+      <div class="brand">
+        <span class="loom-mark" aria-hidden="true"></span>
+        <span class="brand-word">Loom</span>
+        <button id="sidebar-fold" class="icon-button" type="button" title="收起侧栏" aria-label="收起侧栏"><span class="icon icon-menu" aria-hidden="true"></span></button>
+        <button id="sidebar-close" class="icon-button" type="button" aria-label="关闭会话导航">
+          <span class="icon icon-close" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="side-actions">
+        <button id="new-session" type="button"><span class="icon icon-plus" aria-hidden="true"></span>新建会话</button>
+        <button id="quick-open" type="button" title="搜索会话、工具和操作" aria-label="搜索会话、工具和操作"><span class="icon icon-search" aria-hidden="true"></span>搜索<kbd>Ctrl K</kbd></button>
+      </div>
+      <div class="nav-switch" role="group" aria-label="侧栏视图">
+        <button type="button" id="nav-chats" aria-pressed="true">会话</button>
+        <button type="button" id="nav-workspace" aria-pressed="false">工作台</button>
+      </div>
+      <nav id="desk-nav" aria-label="管理与追踪"></nav>
+      <div class="agent-picker">
+        <label class="section-label" for="agent-select">当前 Agent</label>
+        <div class="select-wrap">
+          <select id="agent-select" disabled>
+            <option>请选择 Agent</option>
+          </select>
+        </div>
+        <button id="create-agent" class="text-button" type="button" hidden>创建标准 Agent</button>
+      </div>
+      <nav class="history" aria-labelledby="history-label">
+        <h2 id="history-label" class="section-label">最近会话</h2>
+        <ul id="session-list"></ul>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="connection-button" type="button" aria-haspopup="dialog">
+          <span class="account-avatar" aria-hidden="true"><span class="icon icon-account"></span></span>
+          <span id="connection-state">连接账户</span><span class="account-more" aria-hidden="true">···</span>
+        </button>
+      </div>
+    </aside>
+    <button id="sidebar-scrim" type="button" aria-label="关闭导航" tabindex="-1"></button>
+    <main>
+      <header class="thread-header">
+        <button id="sidebar-toggle" class="icon-button" type="button" aria-label="会话导航" aria-expanded="false" aria-controls="sidebar">
+          <span class="icon icon-menu" aria-hidden="true"></span>
+        </button>
+        <button id="sidebar-show" class="icon-button" type="button" title="展开侧栏" aria-label="展开侧栏"><span class="icon icon-menu" aria-hidden="true"></span></button>
+        <h1 id="thread-title">新会话</h1>
+        <span id="desk-title" class="desk-bar-title"></span>
+        <button id="session-details" class="desk-button" hidden type="button">会话详情</button>
+      </header>
+      <section id="desk-panel" aria-labelledby="desk-heading" hidden>
+        <div class="desk-inner">
+          <div class="desk-location">
+            <button id="desk-chat" type="button" class="desk-link">返回对话</button>
+            <button id="desk-back" type="button" class="desk-link" hidden>‹ 上一级</button>
+            <button id="desk-refresh" type="button" class="desk-refresh">刷新</button>
+          </div>
+          <h2 id="desk-heading" tabindex="-1"></h2>
+          <p id="desk-status" role="status"></p>
+          <div id="desk-content"></div>
+        </div>
+      </section>
+      <div id="conversation-scroll">
+        <div id="empty-state">
+          <div class="empty-emblem" aria-hidden="true"><span class="loom-mark"></span></div>
+          <h2 id="empty-title">想一起处理什么？</h2>
+          <p id="empty-description">给 Agent 发一条消息，开始这段对话。</p>
+          <button id="empty-action" type="button">连接账户</button>
+        </div>
+        <div id="messages" role="log" aria-label="对话记录" aria-live="polite" aria-relevant="additions"></div>
+      </div>
+      <div class="composer-area">
+        <div id="status" role="status" aria-live="polite"></div>
+        <button id="suggested-draft" class="capability-prompt" type="button" hidden></button>
+        <form id="composer">
+          <label class="visually-hidden" for="prompt">消息</label>
+          <textarea id="prompt" name="message" rows="2" placeholder="发消息，输入 / 选操作，@ 选工具…" aria-describedby="send-hint"></textarea>
+          <div id="compose-chips"></div>
+          <div class="composer-actions">
+            <div class="composer-tools">
+              <button class="compose-tool" type="button" id="attach-image" title="添加图片">＋ 图片</button>
+              <input id="image-picker" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+              <button class="compose-tool" type="button" id="goal-toggle" aria-pressed="false" title="以本条消息作为目标启动">目标</button>
+              <button class="compose-tool" type="button" id="suggest-next" title="根据上一条回复生成可编辑草稿" hidden>推荐</button>
+            </div>
+            <span id="send-hint"><kbd>Enter</kbd> 发送<span class="hint-divider" aria-hidden="true">·</span><kbd>Shift + Enter</kbd> 换行</span>
+            <button id="send" type="submit" aria-label="发送消息" title="发送消息" disabled>
+              <span class="icon icon-up" aria-hidden="true"></span>
+            </button>
+          </div>
+        </form>
+        <div id="capability-prompts" aria-label="对话建议" hidden></div>
+        <details id="session-usage" hidden>
+          <summary aria-label="会话用量与压缩详情">
+            <span class="usage-title">会话用量</span>
+            <span class="usage-item">Token <b data-metric="tokens">—</b></span>
+            <span class="usage-item"><span data-speed-label>生成速度</span> <b data-metric="speed">—</b></span>
+            <span class="usage-item" title="最近一次模型输入占自动压缩阈值的比例">上下文占用 <b data-metric="context">—</b></span>
+            <span class="usage-item" title="有缓存用量回执的输入 token 命中率">缓存 <b data-metric="cache">—</b></span>
+            <span class="usage-chevron" aria-hidden="true"></span>
+          </summary>
+          <section class="usage-popover" aria-label="会话用量明细">
+            <div class="usage-head"><h2>会话用量</h2><button type="button" id="usage-refresh">刷新</button></div>
+            <div class="usage-state" role="status"></div>
+            <div class="usage-body"></div>
+          </section>
+        </details>
+      </div>
+    </main>
+  </div>
+  <dialog id="desk-dialog"><form id="desk-form"></form></dialog>
+  <dialog id="quick-dialog" aria-label="搜索会话、工具和操作">
+    <div class="quick-input"><span class="icon icon-search" aria-hidden="true"></span>
+      <input type="search" id="quick-query" aria-label="搜索" autocomplete="off" placeholder="搜索会话、Agent、工具或操作…">
+      <button id="quick-close" type="button" aria-label="关闭搜索">Esc</button>
+    </div>
+    <div id="quick-results" aria-label="搜索结果"></div>
+  </dialog>
+  <dialog id="credential-dialog" aria-labelledby="credential-title" aria-describedby="credential-description">
+    <form id="credential-form">
+      <div class="dialog-heading">
+        <span class="dialog-icon" aria-hidden="true"><span class="icon icon-account"></span></span>
+        <button id="credential-close" class="icon-button" type="button" aria-label="关闭账户连接设置">
+          <span class="icon icon-close" aria-hidden="true"></span>
+        </button>
+      </div>
+      <h2 id="credential-title">连接账户</h2>
+      <p id="credential-description">使用 Loom 账户的 Bearer 令牌访问你的 Agent 和会话。</p>
+      <label for="token-input">Bearer 令牌</label>
+      <input id="token-input" name="token" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴账户令牌">
+      <p id="credential-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="logout" class="text-button" type="button" hidden>断开连接</button>
+        <button id="credential-save" type="submit">连接账户</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

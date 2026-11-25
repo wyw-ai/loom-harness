@@ -1,5 +1,5 @@
-//! Redis carries stable event references. SQLite remains authoritative for the
-//! event, its outbox record and each logical consumer's committed progress.
+//! Transports deliver stable event references. SQLite owns the outbox and
+//! each logical consumer's committed effects.
 
 use crate::store::Store;
 use anyhow::{Context, Result};
@@ -9,6 +9,8 @@ use tokio::{task::JoinHandle, task::JoinSet, time::sleep};
 
 mod redis_stream;
 pub use redis_stream::RedisBus;
+mod local;
+pub use local::LocalBus;
 mod lua_subscriptions;
 pub(crate) use lua_subscriptions::{
     register_lua_subscription, spawn_plugin_bus, subscription_group,
@@ -29,10 +31,17 @@ pub struct Batch {
     pub next_pending_cursor: String,
 }
 
+/// External brokers need a relay from the transactional outbox.
+pub trait OutboxPublisher: Send + Sync {
+    fn publish<'a>(&'a self, event_id: &'a str) -> BusFuture<'a, ()>;
+}
+
 /// The transport returns both abandoned deliveries and newly available ones.
 /// A receipt is opaque outside its group and is acknowledged only after commit.
 pub trait EventBus: Send + Sync {
-    fn publish<'a>(&'a self, event_id: &'a str) -> BusFuture<'a, ()>;
+    fn publisher(self: Arc<Self>) -> Option<Arc<dyn OutboxPublisher>> {
+        None
+    }
     fn receive<'a>(
         &'a self,
         group: &'a str,
@@ -110,7 +119,7 @@ fn event_key(event: &Value) -> Result<&str> {
         .context("stored event has no stable ID")
 }
 
-pub async fn publish_pending(store: &Store, bus: &dyn EventBus) -> Result<usize> {
+pub async fn publish_pending(store: &Store, bus: &dyn OutboxPublisher) -> Result<usize> {
     let pending = store.pending_events(BATCH)?;
     for event in &pending {
         let id = event_key(event)?;
@@ -176,13 +185,15 @@ pub fn spawn_bus(
                 }
             });
         }
-        tasks.spawn(async move {
-            let mut failures = 0;
-            loop {
-                let result = publish_pending(&store, &*bus).await;
-                pace("outbox", result, &mut failures).await;
-            }
-        });
+        if let Some(publisher) = bus.publisher() {
+            tasks.spawn(async move {
+                let mut failures = 0;
+                loop {
+                    let result = publish_pending(&store, &*publisher).await;
+                    pace("outbox", result, &mut failures).await;
+                }
+            });
+        }
         while let Some(result) = tasks.join_next().await {
             if let Err(err) = result {
                 eprintln!("event bus task stopped: {err}");
@@ -197,6 +208,10 @@ async fn pace(task: &str, result: Result<usize>, failures: &mut u32) {
             *failures = 0;
             if count == 0 {
                 sleep(Duration::from_millis(150)).await;
+            } else {
+                // SQLite batches may finish without an async suspension. Let
+                // API and run tasks make progress while replaying a backlog.
+                tokio::task::yield_now().await;
             }
         }
         Err(err) => {

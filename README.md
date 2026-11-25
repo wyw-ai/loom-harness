@@ -4,13 +4,52 @@
 
 ## 本机运行
 
-准备稳定版 Rust、C 编译器及 Redis 6.2 或更高版本。用 `cargo build --locked` 编译。服务默认监听 `127.0.0.1:7331`，在当前目录的 `.loom` 持久化数据。部署方通过环境注入 API 测试凭据和模型凭据。以下 PowerShell 示例使用当前环境中的 `LOOM_TEST_TOKEN` 和 `DEEPSEEK_API_KEY`。
+准备稳定版 Rust 和 C 编译器。本机模式使用内置的 SQLite 事件总线，服务默认监听 `127.0.0.1:7331`，在当前目录的 `.loom` 持久化数据。以下 PowerShell 示例使用当前环境中的 `LOOM_TEST_TOKEN` 和 `DEEPSEEK_API_KEY`。
 
 ```powershell
 $env:LOOM_AUTH_JSON = @{ ($env:LOOM_TEST_TOKEN) = @{ owner = 'local' } } | ConvertTo-Json -Compress
-$env:LOOM_REDIS_URL = 'redis://127.0.0.1:6379/'
 cargo run --locked
 ```
+
+### 事件总线与部署
+
+| 部署方式 | 如何配置 |
+| --- | --- |
+| 单机，本地事件总线 | 新安装直接启动即可。API 和多个 worker 可分进程运行，各进程使用同一个本机 `LOOM_HOME`。显式设置 `LOOM_EVENT_BUS=local` 也可固定使用此模式，已有 Redis 环境变量会被忽略。 |
+| Redis Streams | 设置 `LOOM_EVENT_BUS=redis`，连接 Redis 6.2+。默认地址为 `redis://127.0.0.1:6379/`，可用 `LOOM_REDIS_URL` 和 `LOOM_REDIS_STREAM` 指定地址与 Stream。 |
+
+升级时，如果未设置 `LOOM_EVENT_BUS`，已有的非空 `LOOM_REDIS_URL` 或 `LOOM_REDIS_STREAM` 会继续选择 Redis。曾依赖默认 localhost Redis 且未设过这两个变量的部署，升级前可设置 `LOOM_EVENT_BUS=redis` 保留原行为。通过 `GET /health` 的 `event_bus` 字段查看当前进程选择的后端。切换时统一调整 API 和所有 worker，沿用原 HOME。新选用的总线可能重放历史事件，各订阅按原事件 ID 识别已提交的处理结果。[分发、恢复与切换](docs/spec/architecture/runtime.md#event-distribution)
+
+### 浏览器工作台
+
+启动服务后打开 [WebUI](http://127.0.0.1:7331/webui/)，用上面配置的用户令牌连接，选择 Agent 并开始对话。令牌仅保留在当前页面内存中。刷新后重新连接即可读回服务端保存的会话。
+
+从「会话」选择 Agent 或最近的对话。输入框里敲 `/` 可以选操作，敲 `@` 可以查当前 Agent 的工具并插入它的实际调用名。空会话显示这个 Agent 能做的事，例如让已接入主机的 Agent「浏览主机 Skill」。选择示例只填入草稿，按发送才会产生消息。Run 进行中可以在原地补充、回答或停止。工具过程折在对应轮次下，展开可查参数和回执。
+
+页面由默认启用的官方 `webui` 插件提供。管理员可以通过 `PATCH /api/plugins/webui` 设置 `{"enabled":false}` 关闭页面入口，已有会话仍保存在服务端。
+
+侧栏的「工作台」管理 Agent、插件、工具和调度。「搜索」（Ctrl K，macOS 上为 ⌘ K）可跳到资源、会话或 OI 接入。资源详情的「与创造者讨论」会把当前对象带入有权限的创造者对话。可授权创造者通过 `agents.update` 修改自身描述，再回 Agent 详情核实新修订。Run 详情列出实际使用的模型消息、工具、回执和时序。官方 `webui@1.0.0`、`1.1.0` 和 `1.2.0` 实例会升级到 `1.3.0`，保留原有启停和访问范围。
+
+工具可以贡献与自己相关的输入建议。在独立工具编辑器中填写建议标题和正文，或在工具定义里声明如下字段。网页从 Agent 的生效工具目录取建议；点击时复核当前授权。这个静态入口与基于上文生成的「推荐」共用草稿框。
+
+```yaml
+webui:
+  suggestion:
+    label: 查构建
+    prompt: 请检查本次构建，列出失败步骤和对应日志。
+```
+
+Lua 插件在 `loom.register_tool({...})` 的同一张工具声明表中设置 `webui = {suggestion = {label = "查构建", prompt = "请检查本次构建。"}}` 即可。空会话优先展示六条建议，输入 `/` 可以按名称检索其余建议。
+
+聊天输入框下方的会话统计显示累计 token、输出速度、自动压缩和缓存命中率。点开可看输入与输出拆分、缓存命中与未命中的输入 token，以及最近一次组装的上下文距离压缩阈值还有多远。回复旁标有该 Run 的 token 和总耗时。工具等待、审批和交付等待计入 Run 的总耗时。
+
+客户端可分别读取 `GET /api/sessions/{id}/usage` 和 `GET /api/runs/{id}/usage`。会话统计计入模型续跑、自动压缩和输入框推荐采样。推荐单独列出；同一回复的推荐采样不会改变这次 Run 的用量。供应商没有回传完整计数、或旧模型调用缺少计时字段时，页面标明可用范围。
+
+### 接入 Loom OI
+
+在 OIS 发布目录 Service 和工作 Service 后，管理员打开「工作台 → OI 连接」，也可以按 Ctrl K 搜索「接入 OI」。点「连接 Loom OI」，填入 OIS 服务地址、目录 Service 和已配置的凭据引用，保存后即可查看发现的 Service。选择一个 Service，点「连接到 Agent」完成授权与工具集绑定，再点该 Agent 的对话按钮即可试用。已连接实例直接从 Service 列表开始。例如 `office.workbench` 的 `view_on_a` 在模型请求中仍叫 `view_on_a`。读图时请使用支持图片的模型路由（`images: true`）。ToolCall 的 `oi_call_id` 和 `binding.source` 可定位目标主机上的调用。[实例设置、凭据与 Agent YAML](docs/spec/reference/oi-workspace-tools.md)
+
+### 通过 API 发送消息
 
 从另一个终端用同一 `LOOM_TEST_TOKEN` 调用服务。
 
@@ -63,13 +102,22 @@ CI 通过 `POST /api/tool-calls/{id}/results` 提交回执，使用来源凭据�
 
 ## 验证
 
-启动专用的 Redis 6.2+，安装 Python 3.11+ 和 Node.js 20+。完整验收会启动本机 API 和 worker 进程，调用真实 DeepSeek，并在 CI、模型和下游交付夹具上注入故障。每次运行使用新的证据目录。若使用自定义 Cargo target 目录，以 `LOOM_TEST_BIN` 指向编译得到的可执行文件。
+准备 Python 3.11+ 和 Node.js 20+。以下命令运行 Rust 测试和默认本地总线的第一期验收，启动本机 API 与 worker，调用真实 DeepSeek，并在 CI、模型和下游交付夹具上注入故障。每次运行使用新的证据目录。若使用自定义 Cargo target 目录，以 `LOOM_TEST_BIN` 指向编译得到的可执行文件。
 
 ```powershell
-$env:LOOM_TEST_REDIS_URL = 'redis://127.0.0.1:6379/'
 cargo build --locked
-cargo test --locked -- --include-ignored
+cargo test --locked
 python tests/run_acceptance.py --evidence-dir "$env:TEMP/loom-acceptance-$(New-Guid)"
 ```
 
+单独验证事件分发可运行 `python tests/acceptance_bus.py -v`，使用本机模型夹具。要覆盖 Redis 专项故障，启动专用的 Redis 6.2+，将 `LOOM_TEST_REDIS_URL` 设为其连接地址，再运行同一脚本和 `cargo test --locked -- --include-ignored`。未配置测试 Redis 时，验收报告将 Redis 专项标为跳过。
+
 `DEEPSEEK_API_KEY` 由测试终端的环境提供。测试产物包括每个断言组的结论、可执行文件摘要和脱敏的 HTTP 取证记录。输入框客户端例子在 [examples/composer.mjs](examples/composer.mjs)，上层只在用户点击发送后走正常投递。详细结果见[第一期验收记录](docs/acceptance/results-v1.md)。
+
+本期跨仓联验使用独立 HOME、本机模型夹具、真实 OIS、OIC 和四个已构建的 App。Windows 上从可截图的用户会话运行。将下列环境变量指向对应二进制、App 清单和本地 Playwright 安装目录。测试会在临时目录管理 Service、读取 Skill、截图并验证图片已经送达模型，最后撤下 Service。带 `--browser` 时还会用 Chromium 在页面绑定工具和核对 ToolCall。
+
+```powershell
+python tests/oi_workspace_e2e.py --ois $env:OIS_BIN --oic $env:OIC_BIN --management $env:OI_MANAGEMENT_MANIFEST --skills $env:OI_SKILLS_MANIFEST --capture $env:OI_COMPUTER_USE_MANIFEST --filesystem $env:OI_FILESYSTEM_MANIFEST --browser
+```
+
+浏览器测试读取 `LOOM_PLAYWRIGHT_MODULE`、`LOOM_BROWSER_EXECUTABLE`。服务测试可用 `LOOM_TEST_BIN` 指定可执行文件。可另加 `--live-text` 并设置 `DEEPSEEK_API_KEY`，让 DeepSeek 在单独会话里查找并读取合成 Skill。截图和视觉请求在本机模型夹具内验证。单独运行 `python tests/workbench_e2e.py` 可验收工作台管理、聊天修改自身、审批与 Note，以及窄屏交互。[跨仓验收脚本](tests/oi_workspace_e2e.py) · [工作台浏览器用例](tests/workbench_browser.cjs)

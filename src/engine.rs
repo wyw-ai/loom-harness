@@ -7,17 +7,88 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::time::Duration;
 
+mod compaction;
 #[cfg(test)]
 mod recovery_tests;
 mod tools;
+pub(crate) use tools::model_name;
+
+/// Chat Completions providers accept images on user messages. Keep each native
+/// tool receipt paired with its assistant request and attach the image evidence
+/// after the entire tool batch, including replies to parallel tool calls.
+fn tool_images(result: &mut Value) -> Vec<Value> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let mut images = Vec::new();
+    if let Some(blocks) = result["content"].as_array_mut() {
+        for block in blocks.iter_mut().filter(|b| b["type"] == "image") {
+            let part = block["data"]
+                .as_str()
+                .and_then(|data| STANDARD.decode(data).ok())
+                .and_then(|bytes| context::image_part(block["mimeType"].as_str()?, &bytes).ok());
+            let mime = block["mimeType"].clone();
+            *block = json!({"type":"image","mimeType":mime,"attached":part.is_some()});
+            if let Some(image) = part {
+                images.push(image);
+            }
+        }
+    }
+    images
+}
+
+fn project_tool_images(messages: Vec<Value>) -> Vec<Value> {
+    let mut projected = Vec::new();
+    let mut images = Vec::new();
+    for mut message in messages {
+        if message["role"] == "tool" {
+            if let Some(text) = message["content"].as_str()
+                && text.contains("\"image\"")
+                && let Ok(mut result) = serde_json::from_str::<Value>(text)
+                && result["content"].is_array()
+            {
+                let parts = tool_images(&mut result);
+                if !parts.is_empty() {
+                    images.push(json!({"type":"text","text":format!("Image evidence for tool call {}",message["tool_call_id"])}));
+                    images.extend(parts);
+                }
+                message["content"] = json!(result.to_string());
+            }
+        } else if !images.is_empty() {
+            projected.push(json!({"role":"user","source":"tool_evidence","content":std::mem::take(&mut images)}));
+        }
+        if message["role"] == "user"
+            && message["source"] == "tool_evidence"
+            && let Some(text) = message["content"].as_str()
+            && let Ok(mut receipt) = serde_json::from_str::<Value>(text)
+            && receipt["content"]
+                .as_array()
+                .is_some_and(|bs| bs.iter().any(|b| b["type"] == "image"))
+        {
+            let parts = tool_images(&mut receipt);
+            let mut content =
+                vec![json!({"type":"text","text":format!("Stored tool result: {receipt}")})];
+            content.extend(parts);
+            message["content"] = json!(content);
+        }
+        projected.push(message);
+    }
+    if !images.is_empty() {
+        projected.push(json!({"role":"user","source":"tool_evidence","content":images}));
+    }
+    projected
+}
 
 fn s<'a>(obj: &'a Value, key: &str) -> Result<&'a str> {
     obj[key].as_str().with_context(|| format!("missing {key}"))
 }
+
 fn objects(v: &Value) -> Vec<Value> {
     v.as_array().cloned().unwrap_or_default()
 }
 pub fn chat_history(v: &Value) -> Vec<Value> {
+    project_tool_images(stored_history(v))
+}
+
+fn stored_history(v: &Value) -> Vec<Value> {
     objects(v)
         .into_iter()
         .filter_map(|m| {
@@ -33,7 +104,11 @@ pub fn chat_history(v: &Value) -> Vec<Value> {
             // A historic tool receipt can outlive the ModelCall that issued it.
             // Render it as source material unless the provider-native pair is present.
             let mut message = if role == "tool" {
-                json!({"role":"user","content":format!("Stored tool result: {content}")})
+                if m["content"]["content"].as_array().is_some_and(|bs|bs.iter().any(|b|b["type"]=="image")) {
+                    json!({"role":"user","source":"tool_evidence","content":m["content"].to_string()})
+                } else {
+                    json!({"role":"user","content":format!("Stored tool result: {content}")})
+                }
             } else {
                 json!({"role":role,"content":content})
             };
@@ -163,7 +238,7 @@ fn schemas(catalog: &[Value], goal: bool) -> Vec<Value> {
         if tool["direct"] == true {
             if let Some(id) = tool["id"].as_str() {
                 tools.push(function(
-                    &tools::wire_name(id),
+                    &tools::model_name(tool, id),
                     tool["description"].as_str().unwrap_or(""),
                     tool["input_schema"].clone(),
                 ));
@@ -333,7 +408,7 @@ async fn step(app: &App, w: &Work) -> Result<()> {
         }
         base.push(item);
     }
-    let mut conversation = chat_history(&Value::Array(base));
+    let mut conversation = stored_history(&Value::Array(base));
     let inputs = objects(&run["inputs"]);
     let trigger = app
         .catalog
@@ -359,7 +434,14 @@ async fn step(app: &App, w: &Work) -> Result<()> {
             if let Some(calls) = item.get("tool_calls") {
                 *item = json!({"role":"assistant","content":format!("Previously requested tool calls: {calls}")});
             } else if item["role"] == "tool" {
-                *item = json!({"role":"user","content":format!("Recorded tool result: {}",item["content"])});
+                *item = if item["content"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("\"image\""))
+                {
+                    json!({"role":"user","source":"tool_evidence","content":item["content"]})
+                } else {
+                    json!({"role":"user","content":format!("Recorded tool result: {}",item["content"])})
+                };
             }
         }
     }
@@ -383,7 +465,18 @@ async fn step(app: &App, w: &Work) -> Result<()> {
         {
             item["context_protected"] = json!(true);
         } else {
-            conversation.push(json!({"role":"user","source":"tool_evidence","context_protected":true,"content":format!("Received tool result for {}: {}",receipt["tool_call_id"],receipt["content"])}));
+            let content = if receipt["content"]
+                .as_str()
+                .is_some_and(|s| s.contains("\"image\""))
+            {
+                receipt["content"].clone()
+            } else {
+                json!(format!(
+                    "Received tool result for {}: {}",
+                    receipt["tool_call_id"], receipt["content"]
+                ))
+            };
+            conversation.push(json!({"role":"user","source":"tool_evidence","context_protected":true,"content":content}));
         }
     }
     let prompt_event;
@@ -425,6 +518,7 @@ async fn step(app: &App, w: &Work) -> Result<()> {
         prompt,
     );
     crate::attachments::resolve(&app.cfg.home, owner, &mut messages)?;
+    messages = project_tool_images(messages);
     let names = routes(app, agent);
     if names.is_empty() {
         bail!("no available model configured for this agent")
@@ -455,35 +549,28 @@ async fn step(app: &App, w: &Work) -> Result<()> {
         }
         let key = format!("model:{step}:{}:{name}", inputs.len());
         let previous = prior_calls.iter().find(|c| c["call_key"] == key);
-        let limit = agent["context_bytes"].as_u64().unwrap_or(256_000) as usize;
+        let limit = context::context_limit(agent) as usize;
         let mut covered = Vec::new();
         let mut covered_events = Vec::new();
         let mut compaction_revision = Value::Null;
-        if previous.is_none() && serde_json::to_vec(&messages)?.len() > limit {
-            let compact = app
-                .catalog
-                .compaction_prompt()
-                .map_err(anyhow::Error::msg)?
-                .context("required input exceeds budget and compaction is disabled")?;
-            let summary = context::compact(
-                &app.http,
-                &provider.route(),
-                &messages,
-                limit,
-                s(&compact, "prompt")?,
-            )
-            .await
-            .map_err(|e| anyhow!(e.to_string()))?;
-            compaction_revision = compact["revision"].clone();
-            for (start, end) in &summary.covered {
-                covered_events.extend(
-                    messages[*start..*end]
-                        .iter()
-                        .filter_map(|m| m.get("source_event_id").cloned()),
-                );
-            }
-            messages = summary.messages;
-            covered = summary.covered;
+        let before_bytes = context::input_bytes(&messages);
+        if previous.is_none() && before_bytes > limit {
+            let mut request = json!({"call_key":format!("compact:{key}"),"model":name,"provider_model":provider.model,
+                "reason":"compaction","ctx_snapshot":{"limit_bytes":limit,"used_bytes":before_bytes,"before_bytes":before_bytes}});
+            let (revision, plan) = compaction::plan(app, w, &request, &messages)?;
+            let (start, end) = plan.range;
+            request["compaction_revision"] = revision.clone();
+            request["range"] = json!([start, end]);
+            let shortened =
+                compaction::run(app, w, provider, request, &plan, &messages, limit).await?;
+            compaction_revision = revision;
+            covered_events.extend(
+                messages[start..end]
+                    .iter()
+                    .filter_map(|m| m.get("source_event_id").cloned()),
+            );
+            covered.push((start, end));
+            messages = shortened;
         }
         let call = if let Some(old) = previous {
             old.clone()
@@ -493,7 +580,14 @@ async fn step(app: &App, w: &Work) -> Result<()> {
             } else {
                 directory.as_slice()
             };
-            let req = json!({"call_key":key,"model":name,"provider_model":provider.model,"reason":reason,"messages":messages,"compressed_ranges":covered,"compressed_events":covered_events,"compaction_revision":compaction_revision,"tools":schema,"tool_directory":offered_directory,"goal_policy":policy,"status":"pending"});
+            let used_bytes = if covered.is_empty() {
+                before_bytes
+            } else {
+                context::input_bytes(&messages)
+            };
+            let req = json!({"call_key":key,"model":name,"provider_model":provider.model,"reason":reason,"messages":messages,
+                "ctx_snapshot":{"limit_bytes":limit,"used_bytes":used_bytes,"before_bytes":(!covered.is_empty()).then_some(before_bytes)},
+                "compressed_ranges":covered,"compressed_events":covered_events,"compaction_revision":compaction_revision,"tools":schema,"tool_directory":offered_directory,"goal_policy":policy,"status":"pending"});
             app.db.record_call(w, "model_call", req)?
         };
         if call["status"] == "completed" {
@@ -542,7 +636,7 @@ async fn step(app: &App, w: &Work) -> Result<()> {
                     w,
                     "model_call",
                     cid,
-                    json!({"status":"failed","error":last_error}),
+                    json!({"status":"failed","error":last_error,"usage":reply.usage,"timing":reply.timing}),
                 )?;
             }
             Err(e) => {
@@ -671,4 +765,46 @@ fn input_message(event: &Value) -> Value {
         .cloned()
         .unwrap_or_default();
     json!({"role":"user","context_protected":true,"content":if v.is_string()||v.is_array(){v}else{json!(v.to_string())}})
+}
+
+#[cfg(test)]
+mod image_projection_tests {
+    use super::*;
+
+    #[test]
+    fn native_evidence_follows_every_tool_reply_in_the_batch() {
+        let png = "iVBORw0KGgo=";
+        let receipt = json!({"content":[{"type":"image","mimeType":"image/png","data":png}]});
+        let projected = project_tool_images(vec![
+            json!({"role":"assistant","tool_calls":[{"id":"a"},{"id":"b"}]}),
+            json!({"role":"tool","tool_call_id":"a","content":receipt.to_string()}),
+            json!({"role":"tool","tool_call_id":"b","content":"ordinary text"}),
+            json!({"role":"assistant","content":"end"}),
+        ]);
+        assert_eq!(
+            projected
+                .iter()
+                .map(|m| m["role"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["assistant", "tool", "tool", "user", "assistant"]
+        );
+        assert!(!projected[1]["content"].as_str().unwrap().contains(png));
+        assert_eq!(projected[2]["content"], "ordinary text");
+        assert_eq!(
+            projected[3]["content"][1]["image_url"]["url"],
+            format!("data:image/png;base64,{png}")
+        );
+
+        let stored = json!([{"role":"tool","event_id":"historical","content":receipt}]);
+        let replay = chat_history(&stored);
+        assert_eq!(replay[0]["source_event_id"], "historical");
+        assert_eq!(replay[0]["content"][1], projected[3]["content"][1]);
+        assert!(
+            !replay[0]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains(png)
+        );
+        assert_eq!(stored[0]["content"]["content"][0]["data"], png);
+    }
 }

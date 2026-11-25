@@ -1,5 +1,4 @@
-use super::model::{ModelError, ModelRoute, complete};
-use reqwest::Client;
+use super::model::ModelError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -66,16 +65,48 @@ pub fn build_messages_with_goal_prompt(
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct Compacted {
-    pub messages: Vec<Value>,
-    /// Material ranges are half-open offsets in the input to this build.
-    pub covered: Vec<(usize, usize)>,
+pub struct CompactionPlan {
+    pub input: [Value; 2],
+    pub range: (usize, usize),
 }
 
-fn bytes(messages: &[Value]) -> usize {
-    serde_json::to_vec(messages)
-        .expect("JSON values must serialize")
-        .len()
+fn text_view(message: &Value) -> std::borrow::Cow<'_, Value> {
+    use std::borrow::Cow;
+    let Some(parts) = message["content"].as_array() else {
+        return Cow::Borrowed(message);
+    };
+    if !parts.iter().any(|p| p["type"] == "image_url") {
+        return Cow::Borrowed(message);
+    }
+    let mut result: serde_json::Map<_, _> = message
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k.as_str() != "content")
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let text = parts
+        .iter()
+        .map(|part| {
+            if part["type"] == "image_url" {
+                json!({"type":"text","text":"[image attachment]"})
+            } else {
+                part.clone()
+            }
+        })
+        .collect();
+    result.insert("content".into(), Value::Array(text));
+    Cow::Owned(Value::Object(result))
+}
+
+/// Budget the textual message projection. Encoded image payloads are sent as
+/// native vision input; treating base64 as prompt text would discard ordinary screenshots.
+pub fn input_bytes(messages: &[Value]) -> usize {
+    2 + messages.len().saturating_sub(1)
+        + messages
+            .iter()
+            .map(|m| text_view(m).to_string().len())
+            .sum::<usize>()
 }
 
 fn compressible_range(messages: &[Value]) -> Option<(usize, usize)> {
@@ -118,7 +149,7 @@ fn compressible_range(messages: &[Value]) -> Option<(usize, usize)> {
             pending.clear();
             continue;
         }
-        run_size += bytes(std::slice::from_ref(m));
+        run_size += input_bytes(std::slice::from_ref(m));
         if pending.is_empty() && run_size > best_size {
             best = Some((run_start, i + 1));
             best_size = run_size;
@@ -130,19 +161,7 @@ fn compressible_range(messages: &[Value]) -> Option<(usize, usize)> {
 /// The limit is the input-message byte allowance after the caller reserves
 /// space for tools and output. Mark unsatisfied waits and required evidence
 /// with context_protected before calling. This never invokes a business tool.
-pub async fn compact(
-    http: &Client,
-    route: &ModelRoute,
-    messages: &[Value],
-    max_input_bytes: usize,
-    prompt: &str,
-) -> Result<Compacted, ModelError> {
-    if bytes(messages) <= max_input_bytes {
-        return Ok(Compacted {
-            messages: messages.to_vec(),
-            covered: vec![],
-        });
-    }
+pub fn plan_compaction(messages: &[Value], prompt: &str) -> Result<CompactionPlan, ModelError> {
     if prompt.trim().is_empty() {
         return Err(ModelError::invalid(
             "compaction plugin supplied no summary instruction",
@@ -153,7 +172,7 @@ pub async fn compact(
     let material: Vec<_> = messages[start..end]
         .iter()
         .map(|m| {
-            let mut item = m.clone();
+            let mut item = text_view(m).into_owned();
             if let Some(obj) = item.as_object_mut() {
                 obj.remove("reasoning_content");
             }
@@ -164,23 +183,26 @@ pub async fn compact(
         json!({"role":"system","content":prompt}),
         json!({"role":"user","content":serde_json::to_string(&material).unwrap()}),
     ];
-    let reply = complete(http, route, &input, &[], None).await?;
-    if reply.finish_reason != "stop" || !reply.tool_calls.is_empty() {
-        return Err(ModelError::invalid(
-            "compaction did not produce a complete summary",
-        ));
-    }
+    Ok(CompactionPlan {
+        input,
+        range: (start, end),
+    })
+}
+
+pub fn apply_compaction(
+    messages: &[Value],
+    (start, end): (usize, usize),
+    summary: &str,
+    max_input_bytes: usize,
+) -> Result<Vec<Value>, ModelError> {
     let mut output = messages.to_vec();
-    output.splice(start..end,[json!({"role":"assistant","source":"compaction","content":format!("此前历史摘要：{}",reply.content.unwrap_or_default())})]);
-    if bytes(&output) > max_input_bytes {
+    output.splice(start..end,[json!({"role":"assistant","source":"compaction","content":format!("此前历史摘要：{summary}")})]);
+    if input_bytes(&output) > max_input_bytes {
         return Err(ModelError::invalid(
             "compacted model input still exceeds its budget",
         ));
     }
-    Ok(Compacted {
-        messages: output,
-        covered: vec![(start, end)],
-    })
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -217,5 +239,17 @@ mod tests {
             json!({"role":"user","content":"current"}),
         ];
         assert_eq!(compressible_range(&h), Some((1, 4)));
+    }
+
+    #[test]
+    fn compaction_accounts_for_image_references_without_transcribing_base64() {
+        let image = json!({"role":"user","source_event_id":"evt","content":[
+            {"type":"text","text":"Screen capture"},{"type":"image_url","image_url":{"url":format!("data:image/png;base64,{}","A".repeat(300_000))}}]});
+        let projected = text_view(&image);
+        assert_eq!(projected["source_event_id"], "evt");
+        assert_eq!(projected["content"][0]["text"], "Screen capture");
+        assert_eq!(projected["content"][1]["text"], "[image attachment]");
+        assert!(!projected.to_string().contains("base64"));
+        assert!(input_bytes(&[image]) < 256);
     }
 }

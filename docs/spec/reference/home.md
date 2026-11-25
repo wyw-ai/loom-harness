@@ -236,4 +236,6 @@ credential_ref: ci-read
 
 宿主持久保存 Event、Delivery、Inbox、Run 等待与 Goal 进度、调用、应用记录及其版本引用。多 worker 部署共享 Note 的持久卷目录，并保证后继 worker 能读取原状态、包版本、脚本和产物。附件、二进制结果等其他大对象可用本地 `artifacts/` 或对象存储，状态中保留按授权解析的稳定引用。[执行与恢复](../architecture/runtime.md)
 
-单机 SQLite 是 `state/loom.db` 的部署选项。插件私库、按实例隔离的命名空间、带版本及执行结果的迁移均属候选。迁移或清理后，仍在处理的逻辑调用必须可接续，已发送的输入仍可按记录还原。ZIP 分发、插件迁移脚本与执行任意 SQL 的接口均待评估。简单 Lua 文本可走同一安装、版本登记和启用流程。
+服务默认在 `LOOM_HOME/state/loom.db` 保存业务事实、事务发件箱及本地总线的消费进度。同一台机器上的 API 与 worker 共享这一文件，重启后可继续消费。切换到 Redis Streams 时，业务状态和各订阅的处理记录继续保存在原 HOME。[分发与切换](../architecture/runtime.md#event-distribution)
+
+插件私库、按实例隔离的命名空间、带版本及执行结果的迁移均属候选。迁移或清理后，仍在处理的逻辑调用必须可接续，已发送的输入仍可按记录还原。ZIP 分发、插件迁移脚本与执行任意 SQL 的接口均待评估。简单 Lua 文本可走同一安装、版本登记和启用流程。

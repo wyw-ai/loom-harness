@@ -14,7 +14,7 @@ struct TestBus {
     lose_ack: AtomicBool,
 }
 
-impl EventBus for TestBus {
+impl OutboxPublisher for TestBus {
     fn publish<'a>(&'a self, id: &'a str) -> BusFuture<'a, ()> {
         Box::pin(async move {
             self.stream.lock().unwrap().push(id.into());
@@ -24,6 +24,13 @@ impl EventBus for TestBus {
             Ok(())
         })
     }
+}
+
+impl EventBus for TestBus {
+    fn publisher(self: Arc<Self>) -> Option<Arc<dyn OutboxPublisher>> {
+        Some(self)
+    }
+
     fn receive<'a>(&'a self, group: &'a str, _: &'a str, _: &'a str) -> BusFuture<'a, Batch> {
         Box::pin(async move {
             let acknowledgements = self.acknowledged.lock().unwrap();

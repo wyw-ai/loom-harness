@@ -293,6 +293,52 @@ class ContextAcceptance(unittest.TestCase):
         self.assertEqual(self.history(s)[0]["content"], "A-marker")
         self.assertEqual(self.calls(first)[0]["messages"], initial)
 
+    def test_usage_includes_auxiliary_compaction_and_observes_its_progress(self):
+        self.app.api("POST", "agents", {"id": "metered", "context_bytes": 900, "tools": []})
+        sid = self.session("metered")
+        path = f"sessions/{sid}/usage"
+        initial = self.app.api("GET", path)
+        self.assertEqual(initial["context"]["limit_bytes"], 900)
+        for content in ("first", "old-material " * 200, "last"):
+            self.app.send(sid, content, action="attach")
+        entered, release = Event(), Event()
+
+        def measured(payload):
+            summarizing = "Summarize" in payload["messages"][0]["content"]
+            if summarizing:
+                entered.set()
+                release.wait(8)
+            response = answer("summary" if summarizing else "done")
+            response["usage"] = {
+                "prompt_tokens": 60, "completion_tokens": 3,
+                "total_tokens": 63, "prompt_cache_hit_tokens": 40,
+                "prompt_cache_miss_tokens": 20,
+            }
+            return response
+
+        self.provider.respond = measured
+        rid = self.app.send(sid, "review")["run_id"]
+        try:
+            self.assertTrue(entered.wait(5))
+            working = self.app.api("GET", path)
+            self.assertEqual(working["context"]["state"], "compacting")
+            self.assertGreater(working["context"]["used_bytes"], 900)
+        finally:
+            release.set()
+        self.assertEqual(self.app.wait(rid)["status"], "completed")
+        final = self.app.api("GET", path)
+        self.assertEqual(final["tokens"]["total"], 126)
+        self.assertEqual(final["cache"]["hit_tokens"], 80)
+        self.assertEqual(final["context"]["compactions"], 1)
+        self.assertEqual(final["context"]["state"], "compacted")
+        self.assertLessEqual(final["context"]["used_bytes"], 900)
+        self.assertEqual(final["context"]["before_bytes"], working["context"]["used_bytes"])
+        self.assertEqual(self.app.api("GET", f"runs/{rid}/usage")["tokens"], final["tokens"])
+        self.assertEqual(len(self.app.api("GET", f"runs/{rid}/model-calls")), 1)
+        self.app.stop()
+        self.app.start()
+        self.assertEqual(self.app.api("GET", path)["context"], final["context"])
+
     def test_c03_c08_compress_evidence_and_fail_when_required_input_cannot_fit(self):
         self.app.api(
             "POST", "agents", {"id": "small", "context_bytes": 900, "tools": []}
@@ -384,6 +430,10 @@ class ContextAcceptance(unittest.TestCase):
         failed = self.run_wait("analyze history", status="failed")
         self.assertIn("compaction is disabled", failed["error"])
         self.assertEqual(len(summaries), count)
+        blocked = self.app.api("GET", f"sessions/{self.sid}/usage")["context"]
+        self.assertEqual(blocked["state"], "failed")
+        self.assertGreater(blocked["used_bytes"], blocked["limit_bytes"])
+        self.assertEqual(self.app.api("GET", f"runs/{failed['id']}/usage")["calls"]["total"], 0)
 
     def test_c04_branch_cut_and_late_report(self):
         for text in ("E1", "E2", "secret-after-cut"):

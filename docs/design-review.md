@@ -189,7 +189,7 @@ Agent 定义、Run 状态机、存储、权限、模型执行器、工具分派�
 
 首版规定了三种可分别核实的结果。一条 Event 记下事实，一次 EventDelivery 记下这份事实已投给哪个目标，一个 Run 承担一项交办。比如同一份 CI 报告可以投给资料 Session 留档，也可以投给值班 Agent 排查。两笔收件能分别查到，只有排查形成新的 Run。已在等这份报告的 Run 还可以按原 ToolCall 或作业号接回结果。[领域概念](spec/concepts/domain.md) · [交办与投递验收](spec/goals/v1.md#上下文与事件投递)
 
-下面是**官方设计提出的 32 个候选事件名**。第二列指出谁核实并记录这一事实，第三列说明下一步能据此做什么。宿主负责持久发布，通过可替换的消息总线分发事件，本期默认使用 Redis Streams。公开字段、保留期限和对外托管通用订阅仍待定。来源方可以另行声明业务事件，如构建系统的 `job.finished`。候选公共字段包括 `event_id`、`type`、`source`、契约版本、时间、关联对象及数据或引用。上报业务事实的权限与登记内部推理决定、工具终态的权限分别校验。[事件分发约定](spec/architecture/runtime.md#event-distribution) · [中断与重送验收](spec/goals/v1.md#event-distribution-acceptance) · [原始事件目录](goal-shaping/archive/loom-agent/2026-11-23-initial/overview.md#official-events) · [接口成熟度](spec/reference/contracts.md#完整评审索引)
+下面是**官方设计提出的 32 个候选事件名**。第二列指出谁核实并记录这一事实，第三列说明下一步能据此做什么。宿主负责持久发布，通过可替换的消息总线分发事件，本期默认使用 SQLite 本地事件总线，也支持 Redis Streams。公开字段、保留期限和对外托管通用订阅仍待定。来源方可以另行声明业务事件，如构建系统的 `job.finished`。候选公共字段包括 `event_id`、`type`、`source`、契约版本、时间、关联对象及数据或引用。上报业务事实的权限与登记内部推理决定、工具终态的权限分别校验。[事件分发约定](spec/architecture/runtime.md#event-distribution) · [中断与重送验收](spec/goals/v1.md#event-distribution-acceptance) · [原始事件目录](goal-shaping/archive/loom-agent/2026-11-23-initial/overview.md#official-events) · [接口成熟度](spec/reference/contracts.md#完整评审索引)
 
 | 候选事件 | 事实由谁确认 | 作用 |
 | --- | --- | --- |

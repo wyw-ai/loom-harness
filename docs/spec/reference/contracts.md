@@ -20,7 +20,7 @@
 
 Rust 宿主通过 `PluginProvider` 加载和调用扩展，首版使用 `LuaPluginProvider`。官方与第三方插件共用扩展机制。宿主定义每个扩展点的输入、输出和错误，构造本次调用上下文。一个观察结果的插件和一个负责提交本次模型响应的提供方承担不同职责，宿主须能选定谁的返回值驱动 Run。
 
-插件启用时通过统一入口 `plugin:subscribe` 声明事件类型和范围。宿主按实例授权分发，以实例内稳定的订阅 ID 分别记录消费进度，持久保存处理结果及待执行动作后确认消费。宿主首版默认使用 Redis Streams，替换消息总线时插件沿用同一入口。向 Agent 或 Session 定向投递另行登记 EventDelivery，各目标的收件结果与各订阅的消费进度分别查询。[事件分发约定](../architecture/runtime.md#event-distribution) · [中断与重送验收](../goals/v1.md#event-distribution-acceptance)
+插件启用时通过统一入口 `plugin:subscribe` 声明事件类型和范围。宿主按实例授权分发，以实例内稳定的订阅 ID 分别记录消费进度，持久保存处理结果及待执行动作后确认消费。宿主默认使用 SQLite 本地事件总线，选择 Redis Streams 时插件沿用同一入口。向 Agent 或 Session 定向投递另行登记 EventDelivery，各目标的收件结果与各订阅的消费进度分别查询。[事件分发约定](../architecture/runtime.md#event-distribution) · [中断与重送验收](../goals/v1.md#event-distribution-acceptance)
 
 | 扩展能力 | 首版契约 |
 | --- | --- |
@@ -30,7 +30,8 @@ Rust 宿主通过 `PluginProvider` 加载和调用扩展，首版使用 `LuaPlug
 | 工具执行 | 可用工具默认经 Code Mode 调用，只有显式选择直接调用的工具进入模型原生工具清单。直接工具仅通过原生入口执行。Code Mode 自身有模型可调用的入口。独立 HOME Tool、插件随包工具、内置和 MCP 来源共用注册、授权、版本绑定及回执语义 |
 | 混合工具集 | 部署者可在工具管理实例登记一份成员表，引用自定义 Lua 与 MCP 工具。Agent 绑定该集合后，宿主按 Tool ID 去重、按成员授权并固定本轮目录。集合编辑或连接下线后，在途调用仍按原绑定关联回执。[来源、配置与派发契约](tool-sources.md) |
 | 外部操作恢复 | 工具适配器声明首次受理回执丢失后，外部服务支持哪些查询或幂等重试方式。宿主对原生和 Code Mode 调用使用同一套[恢复规则](#外部工具的恢复能力)。 |
-| MCP 与自定义 Lua | MCP 插件按连接发现并登记远端操作，独立及随包 Lua 工具按来源登记处理函数。Skill 接入留待后续。[工具来源契约](tool-sources.md) |
+| MCP 与自定义 Lua | MCP 插件按连接发现并登记远端操作，独立及随包 Lua 工具按来源登记处理函数。[工具来源契约](tool-sources.md) |
+| OI Service 接入（已封板，待实现） | 内部工具插件按 Service 登记 Toolset，按成员登记直接工具。模型沿用成员发布名，本期由共用 MCP 客户端执行。[接入契约](oi-workspace-tools.md) · [目标与验收](../goals/oi-workspace-tools.md) |
 | 系统指令 | Agent 持有基础 system prompt。工具、工具集及其他插件可注册、刷新、撤出 section。Session 创建时形成初始指令，后续每次模型调用前核对变化 |
 | 压缩和分支 | 官方能力覆盖上下文压缩和 `branch`。压缩需要保留对所覆盖历史的追溯；分支从指定历史位置产生独立 Session，可引用原 Event。父 Run 中已经派发的工具及其迟到结果仍按原调用关联 |
 
