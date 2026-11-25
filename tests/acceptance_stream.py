@@ -12,6 +12,10 @@ from harness import Instance
 
 
 class GatedModel(BaseHTTPRequestHandler):
+    first_chunk = "hello "
+    last_chunk = "world"
+    release_timeout = 15
+
     def log_message(self, *args):
         pass
 
@@ -30,11 +34,11 @@ class GatedModel(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         send({"reasoning_content": "internal reasoning"})
-        send({"content": "hello "})
+        send({"content": self.first_chunk})
         # Only the HTTP client can release the second chunk. This detects buffering
         # until completion without relying on a machine-specific latency threshold.
-        if self.server.release.wait(timeout=15):
-            send({"content": "world"}, finish="stop")
+        if self.server.release.wait(timeout=self.release_timeout):
+            send({"content": self.last_chunk}, finish="stop")
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
 

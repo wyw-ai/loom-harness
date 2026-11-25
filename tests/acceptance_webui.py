@@ -9,6 +9,36 @@ from harness import Instance
 
 
 class WebUi(unittest.TestCase):
+    def test_overview_is_owner_scoped_and_returns_only_recent_summaries(self):
+        with Instance({"LOOM_ROLE": "api"}) as loom:
+            empty = {"session_count": 0, "run_counts": {}, "recent_sessions": [], "recent_runs": []}
+            self.assertEqual(loom.api("GET", "console/overview"), empty)
+            loom.api("POST", "agents", {"id": "operator"})
+            sessions, runs = [], []
+            for index in range(8):
+                body = {"agent_id": "operator"}
+                if index % 2:
+                    body["title"] = f"排班 {index}"
+                session = loom.api("POST", "sessions", body)["id"]
+                runs.append(loom.send(session, f"巡检 {index}")["run_id"])
+                sessions.append(session)
+
+            overview = loom.api("GET", "console/overview")
+            self.assertEqual(overview["session_count"], 8)
+            self.assertEqual(overview["run_counts"], {"queued": 8})
+            self.assertEqual([s["id"] for s in overview["recent_sessions"]], list(reversed(sessions[-6:])))
+            self.assertEqual([r["id"] for r in overview["recent_runs"]], list(reversed(runs[-6:])))
+            self.assertEqual(overview["recent_sessions"][0]["title"], "排班 7")
+            self.assertEqual(overview["recent_sessions"][1]["first_user_preview"], "巡检 6")
+            self.assertEqual(overview["recent_runs"][0]["session_id"], sessions[-1])
+            self.assertEqual(set(overview["recent_runs"][0]),
+                             {"id", "agent_id", "session_id", "status", "created_at"})
+            self.assertEqual(loom.api("GET", "console/overview?owner=qa", token="other-token"), empty)
+            with self.assertRaises(HTTPError) as rejected:
+                loom.api("GET", "console/overview", token="unknown")
+            self.assertEqual(rejected.exception.code, 401)
+            rejected.exception.close()
+
     def test_lua_tool_suggestion_limits(self):
         with Instance() as loom:
             for suggestion in (
@@ -84,6 +114,7 @@ class WebUi(unittest.TestCase):
                 "/webui/richtext.js": "text/javascript",
                 "/webui/chat-flow.css": "text/css",
                 "/webui/desk-workspace.css": "text/css",
+                "/webui/console-shell.css": "text/css",
             }
             for path, content_type in assets.items():
                 with urlopen(loom.base + path) as response:

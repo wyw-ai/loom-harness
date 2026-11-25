@@ -3,37 +3,20 @@ window.createLoomShell = function createLoomShell(client) {
   const el = id => document.getElementById(id);
   const dialog = el('quick-dialog'), input = el('quick-query'), results = el('quick-results');
   const nav = el('desk-nav');
-  let generation = 0, tools = [], actions = [], selected = 0;
+  let generation = 0, tools = [], sessions = [], actions = [], selected = 0;
   const mac = /Mac|iPhone|iPad/.test(navigator.platform);
   el('quick-open').querySelector('kbd').textContent = mac ? '⌘ K' : 'Ctrl K';
 
-  function workTab(work) {
-    document.body.classList.toggle('workspace-nav',work);
-    el('nav-workspace').setAttribute('aria-pressed',String(work));
-    el('nav-chats').setAttribute('aria-pressed',String(!work));
-  }
-  el('nav-workspace').onclick = () => workTab(true);
-  el('nav-chats').onclick = () => {
-    workTab(false);
-    if(document.body.classList.contains('in-desk')) el('desk-chat').click();
-  };
   el('sidebar-fold').onclick = () => {
     document.body.classList.add('sidebar-folded'); el('sidebar-show').focus();
   };
   el('sidebar-show').onclick = () => {
     document.body.classList.remove('sidebar-folded'); el('sidebar-fold').focus();
   };
-  let wasDesk = false;
-  new MutationObserver(() => {
-    const inDesk = document.body.classList.contains('in-desk');
-    if (inDesk !== wasDesk) {workTab(inDesk); wasDesk=inDesk;}
-  }).observe(document.body,{attributes:true,attributeFilter:['class']});
   function syncIdentity() {
-    const guest = !nav.childElementCount;
-    el('nav-workspace').disabled=guest;
-    if(guest) { workTab(false); if(dialog.open)dialog.close(); }
+    if(nav.dataset.connected !== 'true' && dialog.open) dialog.close();
   }
-  new MutationObserver(syncIdentity).observe(nav,{childList:true});
+  new MutationObserver(syncIdentity).observe(nav,{attributes:true,attributeFilter:['data-connected']});
   syncIdentity();
   const make = (tag, value, cls) => {
     const e=document.createElement(tag);
@@ -44,18 +27,18 @@ window.createLoomShell = function createLoomShell(client) {
   function entries(query) {
     const items=[], add=(group,label,detail,run)=>items.push({group,label,detail,run});
     const isAdmin=!!nav.querySelector('[data-section="plugins"]');
-    if(!nav.childElementCount) {
+    if(nav.dataset.connected !== 'true') {
       add('账户','连接账户','',()=>el('connection-button').click());
       return items;
     }
     add('操作','新建会话','',client.newChat);
     if(isAdmin) add('操作','接入 OI','连接主机 · 发现 OIS Service 并授权给 Agent',()=>client.openDesk('oi'));
-    for(const b of document.querySelectorAll('#session-list .session-button'))
-      add('当前 Agent 的会话',b.title || b.textContent,'',()=>b.click());
+    for(const b of nav.querySelectorAll('[data-section]:not([data-section="oi"])'))
+      add('管控台',b.lastElementChild.textContent,b.dataset.section,()=>b.click());
+    for(const s of sessions)
+      add('当前 Agent 的会话',s.title,'',()=>client.openSession(s.agent,s.id));
     for(const a of client.listAgents())
       add('切换 Agent',a.name || a.id,a.id,()=>client.openAgent(a.id));
-    for(const b of nav.querySelectorAll('[data-section]:not([data-section="oi"])'))
-      add('工作台',b.lastElementChild.textContent,b.dataset.section,()=>client.openDesk(b.dataset.section));
     if(query) for(const t of tools) {
       const name=t.model_name || t.id;
       if(!name) continue;
@@ -68,7 +51,7 @@ window.createLoomShell = function createLoomShell(client) {
         const hint=current.webui?.suggestion;
         const label=typeof hint?.label==='string' && hint.label.trim();
         const prompt=typeof hint?.prompt==='string' && hint.prompt.trim();
-        client.draft(label && label.length<=64 && prompt && prompt.length<=1200 ? prompt : '请告诉我 '+name+' 能做什么，以及它需要哪些参数。');
+        await client.draft(label && label.length<=64 && prompt && prompt.length<=1200 ? prompt : '请告诉我 '+name+' 能做什么，以及它需要哪些参数。',agent);
       });
     }
     return items;
@@ -118,14 +101,16 @@ window.createLoomShell = function createLoomShell(client) {
   async function show() {
     if(dialog.open || document.querySelector('dialog[open]'))return;
     const version=++generation;
-    input.value='';tools=[];render();dialog.showModal();input.focus();
-    if(!nav.childElementCount)return;
-    try{
-      const available=await client.listTools();
-      if(dialog.open && version===generation){tools=available||[];render();}
-    }catch{ /* Navigation and local session search still work. */ }
+    input.value='';tools=[];sessions=[];render();dialog.showModal();input.focus();
+    if(nav.dataset.connected !== 'true')return;
+    const [available, recent]=await Promise.allSettled([client.listTools(),client.listSessions()]);
+    if(dialog.open && version===generation){
+      tools=available.status==='fulfilled' ? available.value : [];
+      sessions=recent.status==='fulfilled' ? recent.value : [];
+      render();
+    }
   }
-  dialog.addEventListener('close',()=>{generation++;tools=[];actions=[];results.replaceChildren();});
+  dialog.addEventListener('close',()=>{generation++;tools=[];sessions=[];actions=[];results.replaceChildren();});
   dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close();});
   el('quick-close').onclick=()=>dialog.close();
   el('quick-open').onclick=show;

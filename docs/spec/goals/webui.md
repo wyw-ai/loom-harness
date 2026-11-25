@@ -16,7 +16,9 @@
 | 管资源 | 左栏持续提供 Agent、工具、运行、事件等入口，并按身份显示插件、OI 连接等管理项。可在详情里直接编辑，也可将对象带入创造者对话，由用户确认后发送，随后回到详情核对实际修改。 |
 | 边聊边查 | 同一页面保留当前对话。用户可以在回复生成期间查看管理页，再回到原会话继续阅读或发送先前的草稿。窄屏把同一套导航收进抽屉。 |
 
-总览读取经身份验证的 `GET /api/console/overview`。Run 与 Session 按凭据的 owner 统计，最近列表各取最新创建的六条。响应只携带列表需要的字段，未命名会话沿用首条用户消息的简短预览。当前用户可操作的资源按服务端授权显示。
+总览读取经身份验证的 `GET /api/console/overview`。Run 与 Session 按凭据的 owner 统计，最近列表各取最新创建的六条。响应只携带列表需要的字段，未命名会话沿用首条用户消息的简短预览。管理员能查看跨 owner 的 Agent 配置，可以发起对话的 Agent 按当前 owner 筛选。
+
+浏览器验收使用本机测试账号和模型夹具，记录了正在执行、等待及完成三种状态。[桌面总览](../../acceptance/evidence/webui/console-1.4-overview-desktop.png) · [原会话与执行记录](../../acceptance/evidence/webui/console-1.4-conversation-desktop.png) · [手机导航](../../acceptance/evidence/webui/console-1.4-navigation-mobile.png)
 
 ### 管理和运行能力
 

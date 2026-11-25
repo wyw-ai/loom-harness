@@ -1,4 +1,4 @@
-# loom-harness
+# Loom Remote Agent
 
 云端 Agent 服务，以 Session 保存连续对话，以 Run 承接一次交办。HTTP 客户端可以创建 Agent、提交消息、查询模型与工具调用，重连后读回原结果。[首版范围与验收标准](docs/spec/goals/v1.md) · [按用户身份验收](docs/acceptance/README.md)
 

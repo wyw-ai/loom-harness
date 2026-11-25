@@ -1,13 +1,16 @@
 'use strict';
 // Launched by workbench_e2e.py with a fresh Harness instance and a local provider.
 const assert = require('node:assert/strict');
+const { mkdir } = require('node:fs/promises');
+const path = require('node:path');
 const { chromium } = require(process.env.LOOM_PLAYWRIGHT_MODULE || 'playwright');
 const base = process.env.LOOM_BROWSER_BASE;
 const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV90AAAAASUVORK5CYII=';
 
 const button = (p, name) => p.getByRole('button', { name, exact: true });
 const nav = async (p, id) => {
-  if (!(await p.locator('#desk-nav').isVisible())) await p.locator('#nav-workspace').click();
+  const drawer = p.locator('#sidebar-toggle');
+  if (await drawer.isVisible() && await drawer.getAttribute('aria-expanded') !== 'true') await drawer.click();
   await p.locator('#desk-nav [data-section="' + id + '"]').click();
 };
 const row = (p, text) => p.locator('#desk-content button.desk-row').filter({ hasText: text });
@@ -55,6 +58,95 @@ async function waitRun(id, status) {
   assert.fail('Run ' + id + ' did not reach ' + status);
 }
 
+async function capture(page, name) {
+  const dir = process.env.LOOM_WORKBENCH_SCREENSHOTS;
+  if (!dir) return;
+  await mkdir(dir, {recursive:true});
+  await page.screenshot({path:path.join(dir, name + '.png'), animations:'disabled'});
+}
+
+async function consoleWorkflow(p) {
+  const recentRuns = p.locator('#overview-runs');
+  const recentSessions = p.locator('#overview-sessions');
+  await p.getByRole('heading', {name:'总览', exact:true}).waitFor();
+  await recentRuns.getByText('暂无运行记录', {exact:true}).waitFor();
+  assert.equal(await p.locator('#desk-nav [data-section=overview]').getAttribute('aria-current'), 'page');
+  const overviewApi = '**/api/console/overview';
+  await p.route(overviewApi, route => route.fulfill({status:503, contentType:'application/json', body:'{}'}));
+  try {
+    await p.locator('#desk-refresh').click();
+    await p.locator('#desk-content').getByText(/读取失败/).first().waitFor();
+    await button(p.locator('#overview-agents'), '查看 Agent 配置 · 工作助手').waitFor();
+  } finally {
+    await p.unroute(overviewApi);
+  }
+  await button(p.locator('#desk-content'), '重试').click();
+  await recentRuns.getByText('暂无运行记录', {exact:true}).waitFor();
+
+  await button(p.locator('#overview-agents'), '与 工作助手 对话').click();
+  await p.locator('#new-session').click();
+  const handoff = await send(p, '整理本次发布的交接事项');
+  await waitRun(handoff.run_id, 'completed');
+  await p.locator('#messages').getByRole('cell', {name:'值班', exact:true}).waitFor();
+  await p.locator('#session-usage [data-metric=tokens]').filter({hasText:/^1K$/}).waitFor();
+  await capture(p, 'conversation-desktop');
+  await p.locator('#new-session').click();
+  const pending = await send(p, '核对生产发布的审计记录');
+  await waitRun(pending.run_id, 'waiting');
+
+  await p.locator('#agent-select').selectOption('monitor');
+  await p.locator('#new-session').click();
+  const live = await send(p, '检查当前发布队列的执行进度');
+  await p.locator('#messages').getByText('已读取发布队列。', {exact:true}).waitFor();
+  const draft = '发布前再确认一次值班安排。';
+  await p.locator('#prompt').fill(draft);
+  await nav(p, 'overview');
+  const active = recentRuns.locator('[data-run-id="' + live.run_id + '"]');
+  await active.waitFor();
+  assert.match(await active.innerText(), /运行中/);
+  assert.match(await active.innerText(), /检查当前发布队列的执行进度/);
+  assert.match(await recentRuns.locator('[data-run-id="' + pending.run_id + '"]').innerText(), /等待/);
+  await recentSessions.locator('[data-session-id="' + handoff.session_id + '"]').waitFor();
+  await capture(p, 'overview-desktop');
+  await active.click();
+  await p.locator('#desk-content .run-usage-details[data-run-id="' + live.run_id + '"]').waitFor();
+  await p.goBack();
+  await recentRuns.locator('[data-run-id="' + live.run_id + '"]').waitFor();
+  await p.goForward();
+  await p.locator('#desk-content .run-usage-details[data-run-id="' + live.run_id + '"]').waitFor();
+
+  await p.setViewportSize({width:390, height:844});
+  await p.locator('#sidebar-toggle').click();
+  await p.locator('#desk-nav [data-section=agents]').waitFor();
+  await capture(p, 'navigation-mobile');
+  await nav(p, 'agents');
+  assert.equal(await p.locator('#sidebar-toggle').getAttribute('aria-expanded'), 'false');
+  assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await row(p, '巡检助手').click();
+  await button(p, '编辑 Agent').click();
+  await field(p, 'description').fill('用于核对云端发布与巡检记录。');
+  await submit(p);
+  assert.equal((await read('agents/monitor')).description, '用于核对云端发布与巡检记录。');
+
+  // The model emits its final chunk only after the real UI has switched to management.
+  assert.equal((await read('runs/' + live.run_id)).status, 'running');
+  assert.equal((await fetch(process.env.LOOM_BROWSER_RELEASE, {method:'POST'})).status, 204);
+  await waitRun(live.run_id, 'completed');
+  const finalText = p.locator('#messages').getByText('当前批次的检查均已结束，可以开始发布。', {exact:true});
+  await finalText.waitFor({state:'attached'});
+  await p.setViewportSize({width:1440, height:900});
+  await p.locator('#nav-chats').click();
+  await finalText.waitFor();
+  assert.equal(await p.locator('#prompt').inputValue(), draft);
+  assert.equal(await p.locator('#messages .message-assistant').count(), 1);
+  assert.equal(new URLSearchParams(new URL(p.url()).hash.slice(1)).get('session'), live.session_id);
+
+  await nav(p, 'overview');
+  await recentSessions.locator('[data-session-id="' + handoff.session_id + '"]').click();
+  await p.locator('#messages').getByRole('cell', {name:'值班', exact:true}).waitFor();
+  assert.equal(new URLSearchParams(new URL(p.url()).hash.slice(1)).get('session'), handoff.session_id);
+}
+
 async function usageFigures(page) {
   const created = await page.request.post(base + '/api/sessions', {
     headers: {Authorization:'Bearer admin-token'}, data:{agent_id:'desktop'},
@@ -67,6 +159,7 @@ async function usageFigures(page) {
   const metric = name => meter.locator('[data-metric="' + name + '"]');
   for (const [prompt, runTokens, sessionTokens] of [['统计第一轮',100,100], ['统计第二轮',150,250]]) {
     const job = await send(page,prompt);
+    assert.equal(job.session_id, session.id, 'The requested session deep link must own the new Run');
     await waitRun(job.run_id,'completed');
     const receipt = page.locator('#messages .run-usage[data-run-id="' + job.run_id + '"]');
     await receipt.filter({hasText:runTokens + ' token'}).first().waitFor();
@@ -298,6 +391,7 @@ async function conversation(p) {
 async function approvalAndGoal(p) {
   await login(p, 'approve-token');
   assert.equal(await p.locator('#desk-nav [data-section=plugins]').count(), 0);
+  await p.locator('#nav-chats').click();
   await p.locator('#agent-select').selectOption('desktop');
   await p.locator('#new-session').click();
   const r = await send(p, '审批笔记测试');
@@ -342,18 +436,44 @@ async function approvalAndGoal(p) {
   assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 }
 
+async function inaccessibleLinks(p) {
+  const headers = {Authorization:'Bearer other-token'};
+  const agent = await p.request.post(base + '/api/agents', {headers, data:{id:'private-ops'}});
+  assert.ok(agent.ok());
+  const session = await p.request.post(base + '/api/sessions', {headers, data:{agent_id:'private-ops'}});
+  assert.ok(session.ok());
+  const foreign = await session.json();
+  await p.setViewportSize({width:1440, height:900});
+  await login(p, 'user-token');
+  for (const [link, notice] of [
+    ['view=plugins', /管理员身份/],
+    ['agent=private-ops', /无法打开指定的 Agent/],
+    ['agent=desktop&session=' + foreign.id, /无法打开指定的会话/],
+  ]) {
+    await p.goto(base + '/webui/#' + link);
+    await p.waitForURL(url => url.hash === '#view=overview');
+    await p.locator('#desk-status').filter({hasText:notice}).waitFor();
+    assert.equal(await p.locator('#prompt').isVisible(), false);
+  }
+}
+
 (async () => {
   assert.ok(base, 'Launch with workbench_e2e.py');
   const browser = await chromium.launch({ executablePath: process.env.LOOM_BROWSER_EXECUTABLE || undefined });
   try {
-    const p = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     p.setDefaultTimeout(12000);
     const errors = [];
     p.on('pageerror', (err) => errors.push(err.message));
     await login(p, 'user-token');
+    await p.locator('#overview-runs').waitFor();
+    assert.equal(await p.locator('#desk-nav [data-section=plugins]').count(), 0);
+    await p.locator('#nav-chats').click();
     await pluginSuggestion(p);
     console.log('PASS Lua plugin Toolset exposes a plain-text draft only to the authorized Agent and expires on disable');
     await login(p, 'admin-token');
+    await consoleWorkflow(p);
+    console.log('PASS console overview, Run drill-down, mobile management, and conversation draft across a live stream');
     await keyboardAndRendering(p);
     console.log('PASS keyboard navigation, scoped tools, slash actions and Markdown');
     await usageFigures(p);
@@ -366,6 +486,8 @@ async function approvalAndGoal(p) {
     console.log('PASS attachment, suggestion, branch, context, ModelCall and Event');
     await approvalAndGoal(p);
     console.log('PASS approval, result original, Note line range, Goal and mobile navigation');
+    await inaccessibleLinks(p);
+    console.log('PASS restricted management, Agent and Session links return to overview');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

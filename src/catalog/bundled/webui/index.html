@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#fafaf7">
-  <title>Loom 工作台</title>
+  <meta name="theme-color" content="#17292f">
+  <title>Loom Remote Agent · 管控台</title>
   <link rel="stylesheet" href="app.css">
   <link rel="stylesheet" href="chat-flow.css">
   <link rel="stylesheet" href="desk-workspace.css">
+  <link rel="stylesheet" href="console-shell.css">
   <script src="richtext.js" defer></script>
   <script src="usage.js" defer></script>
   <script src="shell.js" defer></script>
@@ -15,39 +16,37 @@
   <script src="app.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#prompt">跳到消息输入框</a>
+  <a class="skip-link" href="#main-content">跳到主内容</a>
   <div class="workspace">
-    <aside id="sidebar" aria-label="工作台导航">
+    <aside id="sidebar" aria-label="管控台导航">
       <div class="brand">
-        <span class="loom-mark" aria-hidden="true"></span>
-        <span class="brand-word">Loom</span>
+        <span class="brand-tile" aria-hidden="true"><span class="loom-mark"></span></span>
+        <span class="brand-word">Loom <span>Remote Agent</span></span>
         <button id="sidebar-fold" class="icon-button" type="button" title="收起侧栏" aria-label="收起侧栏"><span class="icon icon-menu" aria-hidden="true"></span></button>
-        <button id="sidebar-close" class="icon-button" type="button" aria-label="关闭会话导航">
+        <button id="sidebar-close" class="icon-button" type="button" aria-label="关闭导航">
           <span class="icon icon-close" aria-hidden="true"></span>
         </button>
       </div>
       <div class="side-actions">
-        <button id="new-session" type="button"><span class="icon icon-plus" aria-hidden="true"></span>新建会话</button>
         <button id="quick-open" type="button" title="搜索会话、工具和操作" aria-label="搜索会话、工具和操作"><span class="icon icon-search" aria-hidden="true"></span>搜索<kbd>Ctrl K</kbd></button>
+        <button id="new-session" type="button" aria-label="新建会话" title="新建会话"><span class="icon icon-plus" aria-hidden="true"></span></button>
       </div>
-      <div class="nav-switch" role="group" aria-label="侧栏视图">
-        <button type="button" id="nav-chats" aria-pressed="true">会话</button>
-        <button type="button" id="nav-workspace" aria-pressed="false">工作台</button>
-      </div>
-      <nav id="desk-nav" aria-label="管理与追踪"></nav>
-      <div class="agent-picker">
-        <label class="section-label" for="agent-select">当前 Agent</label>
-        <div class="select-wrap">
-          <select id="agent-select" disabled>
-            <option>请选择 Agent</option>
-          </select>
+      <div class="console-side-scroll">
+        <nav id="desk-nav" aria-label="管控台页面"></nav>
+        <div class="agent-picker">
+          <label class="section-label" for="agent-select">当前 Agent</label>
+          <div class="select-wrap">
+            <select id="agent-select" disabled>
+              <option>请选择 Agent</option>
+            </select>
+          </div>
+          <button id="create-agent" class="text-button" type="button" hidden>创建标准 Agent</button>
         </div>
-        <button id="create-agent" class="text-button" type="button" hidden>创建标准 Agent</button>
+        <nav class="history" aria-labelledby="history-label">
+          <h2 id="history-label" class="section-label">最近会话</h2>
+          <ul id="session-list"></ul>
+        </nav>
       </div>
-      <nav class="history" aria-labelledby="history-label">
-        <h2 id="history-label" class="section-label">最近会话</h2>
-        <ul id="session-list"></ul>
-      </nav>
       <div class="sidebar-footer">
         <button id="connection-button" type="button" aria-haspopup="dialog">
           <span class="account-avatar" aria-hidden="true"><span class="icon icon-account"></span></span>
@@ -56,24 +55,27 @@
       </div>
     </aside>
     <button id="sidebar-scrim" type="button" aria-label="关闭导航" tabindex="-1"></button>
-    <main>
+    <main id="main-content" tabindex="-1">
       <header class="thread-header">
-        <button id="sidebar-toggle" class="icon-button" type="button" aria-label="会话导航" aria-expanded="false" aria-controls="sidebar">
+        <button id="sidebar-toggle" class="icon-button" type="button" aria-label="管控台导航" aria-expanded="false" aria-controls="sidebar">
           <span class="icon icon-menu" aria-hidden="true"></span>
         </button>
         <button id="sidebar-show" class="icon-button" type="button" title="展开侧栏" aria-label="展开侧栏"><span class="icon icon-menu" aria-hidden="true"></span></button>
-        <h1 id="thread-title">新会话</h1>
+        <button type="button" id="console-home">管控台</button><span class="bar-divider" aria-hidden="true">/</span>
+        <h1 id="thread-title">对话</h1>
         <span id="desk-title" class="desk-bar-title"></span>
+        <div class="console-header-actions">
+          <button id="desk-refresh" type="button" class="desk-refresh">刷新</button>
+          <button id="desk-chat" type="button" class="desk-button">返回对话</button>
+        </div>
         <button id="session-details" class="desk-button" hidden type="button">会话详情</button>
       </header>
       <section id="desk-panel" aria-labelledby="desk-heading" hidden>
         <div class="desk-inner">
           <div class="desk-location">
-            <button id="desk-chat" type="button" class="desk-link">返回对话</button>
             <button id="desk-back" type="button" class="desk-link" hidden>‹ 上一级</button>
-            <button id="desk-refresh" type="button" class="desk-refresh">刷新</button>
           </div>
-          <h2 id="desk-heading" tabindex="-1"></h2>
+          <h1 id="desk-heading" tabindex="-1"></h1>
           <p id="desk-status" role="status"></p>
           <div id="desk-content"></div>
         </div>

@@ -16,12 +16,11 @@ async function login(page, token) {
   await page.locator('#token-input').fill(token);
   await page.locator('#credential-save').click();
   await page.locator('#credential-dialog').waitFor({ state: 'hidden' });
-  await page.locator('#nav-workspace').click();
-  await page.locator('#desk-nav').getByRole('button', { name: '运行', exact: true }).waitFor();
+  await nav(page, 'runs').waitFor();
 }
 
-function nav(page, name) {
-  return page.locator('#desk-nav').getByRole('button', { name, exact: true });
+function nav(page, section) {
+  return page.locator('#desk-nav [data-section="' + section + '"]');
 }
 
 function row(page, name) {
@@ -43,7 +42,7 @@ async function details(page, name) {
 
 async function bind(page) {
   await login(page, 'admin-token');
-  await nav(page, '插件').click();
+  await nav(page, 'plugins').click();
   await row(page, 'office').click();
   const service = page.locator('article.oi-service[data-service="' + group + '"]');
   await service.getByText('可用', { exact: true }).waitFor();
@@ -59,8 +58,7 @@ async function bind(page) {
   await tryInChat.waitFor();
   await tryInChat.click();
   await page.waitForFunction(() => document.querySelector('#prompt').value.includes('list_skills'));
-  await page.locator('#nav-workspace').click();
-  await nav(page, 'Agent').click();
+  await nav(page, 'agents').click();
   await row(page, 'reader').click();
   const agent = await details(page, 'Agent spec');
   assert.deepEqual(agent.tools, [{ toolset: group }]);
@@ -75,8 +73,8 @@ async function trace(page) {
   const callId = required('LOOM_BROWSER_TRACE_CALL');
   const oiId = required('LOOM_BROWSER_OI_CALL');
   await login(page, 'user-token');
-  assert.equal(await nav(page, '插件').count(), 0, 'Plugin administration must be hidden for the consumer');
-  await nav(page, '运行').click();
+  assert.equal(await nav(page, 'plugins').count(), 0, 'Plugin administration must be hidden for the consumer');
+  await nav(page, 'runs').click();
   await row(page, runId).click();
   await row(page, callId).click();
   const call = await details(page, '调用来源与完整记录');
