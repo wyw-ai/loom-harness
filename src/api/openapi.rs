@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 const PUBLIC: &[(&str, &str)] = &[
     ("identity", "get"),
+    ("console/overview", "get"),
     ("sessions/{id}/notes", "get"),
     ("sessions/{id}/notes/{note_id}", "get"),
     ("models", "get"),
@@ -100,6 +101,11 @@ pub(super) fn document(mut paths: Value, who: &crate::config::Identity) -> Value
             };
             let mut op = json!({"responses":{status:{"description":"Success","content":{"application/json":{"schema":{}}}}}});
             if method == "get" {
+                if path == "console/overview" {
+                    op["summary"] = json!(
+                        "Session count, Run counts by status and the six newest Sessions and Runs for the authenticated owner"
+                    );
+                }
                 let filter = match path {
                     "runs" => Some((
                         "system_prompt_event_id",

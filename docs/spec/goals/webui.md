@@ -1,12 +1,26 @@
-# Loom Harness WebUI 目标与验收
+# Loom Remote Agent 管控台与对话
 
-官方 `webui@1.3.0` 在 `/webui/` 提供聊天与管理工作台。管理员可以通过页面发现 OI Service 并绑定给 Agent，普通用户可以从对话展开一次工具执行，核对回执、目标 Host 与 OI 调用号。这条链路已用真实 OIS、OIC、浏览器在 Windows 联验。[复现方法](../../../README.md#验证) · [当前目标](../../goal-shaping/current/webui/design.md) · [封板记录](../../goal-shaping/archive/webui/2026-11-24-product-scope/notes.md)
+官方 `webui@1.4.0` 在 `/webui/` 提供云端 Agent 的管控台与对话。管理员可以通过页面发现 OI Service 并绑定给 Agent，普通用户可以从对话展开一次工具执行，核对回执、目标 Host 与 OI 调用号。[复现方法](../../../README.md#验证) · [当前目标](../../goal-shaping/current/webui/design.md) · [封板记录](../../goal-shaping/archive/webui/2026-11-24-product-scope/notes.md)
 
 ## 目标
 
 交付一个能使用和管理整个 Loom Harness 的 WebUI。用户既能与 Agent 协作，也能找到自己有权管理的资源、查看当前配置，并核实一次修改或运行的实际结果。Agent 管理、插件管理和工具管理均属于核心范围。
 
 ## 已确认的产品范围
+
+### 从总览到原会话
+
+| 用户要做什么 | 页面入口与结果 |
+| --- | --- |
+| 看云端在做什么 | 连接后默认进入总览。按当前身份显示 Agent、会话和运行状态。点击最近运行查看状态、模型调用与工具回执，点击最近会话直接继续对话。打开已有会话链接也直接进入对应 Session。 |
+| 管资源 | 左栏持续提供 Agent、工具、运行、事件等入口，并按身份显示插件、OI 连接等管理项。可在详情里直接编辑，也可将对象带入创造者对话，由用户确认后发送，随后回到详情核对实际修改。 |
+| 边聊边查 | 同一页面保留当前对话。用户可以在回复生成期间查看管理页，再回到原会话继续阅读或发送先前的草稿。窄屏把同一套导航收进抽屉。 |
+
+总览读取经身份验证的 `GET /api/console/overview`。Run 与 Session 按凭据的 owner 统计，最近列表各取最新创建的六条。响应只携带列表需要的字段，未命名会话沿用首条用户消息的简短预览。管理员能查看跨 owner 的 Agent 配置，可以发起对话的 Agent 按当前 owner 筛选。
+
+浏览器验收使用本机测试账号和模型夹具，记录了正在执行、等待及完成三种状态。[桌面总览](../../acceptance/evidence/webui/console-1.4-overview-desktop.png) · [原会话与执行记录](../../acceptance/evidence/webui/console-1.4-conversation-desktop.png) · [手机导航](../../acceptance/evidence/webui/console-1.4-navigation-mobile.png)
+
+### 管理和运行能力
 
 | 能力 | 用户应该能完成的事情 |
 | --- | --- |
@@ -40,7 +54,7 @@
 
 每个 Run 在对应回复旁及 Run 详情中显示累计输入输出消耗和从受理到终态的实际耗时。运行中展示已用时间。新请求的终态时间持久化，重连后可复核；只有秒级时间戳的旧 Run 按近似值展示。读取统计复用 Session 和 Run 的归属校验，不触发模型调用。
 
-聊天区保留会话、草稿与执行过程；「工作台」汇总管理入口。Ctrl K（macOS 上为 ⌘ K）可跨两处查找当前身份可见的入口。输入框的 `/` 列操作及工具贡献的建议；`@` 从当前 Agent 有权调用的工具中插入模型名。对话中向上阅读时，后续流式输出保留当前位置，用户可以主动回到最新消息。参数、回执和 Run 详情可以从对应轮次逐步展开。完成的回复可复制原文或从所选回复分支，新会话的历史截至该回复。
+Ctrl K（macOS 上为 ⌘ K）可以查找当前身份可见的入口。对话输入框的 `/` 列出操作及工具贡献的建议，`@` 插入当前 Agent 有权调用的工具名。向上阅读时，后续流式输出保留阅读位置，用户可以主动回到最新消息。参数、回执和 Run 详情可以从对应轮次展开。完成的回复可复制原文或从所选回复分支，新会话的历史截至该回复。
 
 工具可通过 `webui.suggestion` 声明简短标题 `label` 与草稿 `prompt`，去除首尾空白后分别限 64 和 1200 个 UTF-16 单元。建议必须来自 Agent 的生效工具目录，采用前再次核对授权，点击后保留编辑机会。比如绑定主机 Skill 的工具集后，空会话即可从「浏览主机 Skill」开始。[DSH 与 Loom 网页实测](../../acceptance/webui-comparison.md)
 

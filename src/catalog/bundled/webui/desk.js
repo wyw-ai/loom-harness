@@ -7,6 +7,8 @@ window.createLoomDesk = function createLoomDesk(client) {
   const editor = byId('desk-dialog');
   const eid = encodeURIComponent;
   const label = {
+    overview: '总览',
+    sessions: '会话列表',
     agents: 'Agent',
     plugins: '插件',
     oi: 'OI 连接',
@@ -24,16 +26,8 @@ window.createLoomDesk = function createLoomDesk(client) {
     reply: '回复',
     agentTool: 'Agent 工具',
   };
-  const symbol = {
-    agents: '◉',
-    plugins: '⊞',
-    oi: '⇄',
-    tools: '⌘',
-    runs: '▷',
-    events: '≋',
-    dispatches: '◷',
-    host: '▤',
-  };
+  const adminSections = new Set(['plugins', 'oi', 'sets', 'connections']);
+  const detailSections = new Set(['session', 'agentTool', 'modelcall', 'toolcall', 'eventDelivery', 'reply']);
   let identity = null;
   let paths = {};
   let current = null;
@@ -173,14 +167,12 @@ window.createLoomDesk = function createLoomDesk(client) {
     return box;
   }
   function reset() {
-    identity = null;
-    paths = {};
     sequence = [];
-    close();
+    close({ silent: true });
     dismiss();
-    nav.replaceChildren();
+    connect(null);
   }
-  function close() {
+  function close({ silent = false } = {}) {
     ++revision;
     reader?.abort();
     current = null;
@@ -188,6 +180,8 @@ window.createLoomDesk = function createLoomDesk(client) {
     document.body.classList.remove('in-desk');
     byId('desk-content').replaceChildren();
     nav.querySelector('[aria-current]')?.removeAttribute('aria-current');
+    byId('nav-chats')?.setAttribute('aria-current', 'page');
+    if (!silent) client.recordChat();
     if (lastFocus?.isConnected && !document.body.classList.contains('sidebar-open'))
       lastFocus.focus({ preventScroll: true });
     lastFocus = null;
@@ -195,26 +189,32 @@ window.createLoomDesk = function createLoomDesk(client) {
   function dismiss() {
     if (editor.open) editor.close();
   }
-  function connect(id, api) {
+  function connect(id, api = {}) {
     identity = id;
     paths = api.paths || {};
     nav.replaceChildren();
-    const sections = [
-      'agents',
-      ...(id.admin ? ['plugins', 'oi'] : []),
-      'tools',
-      'runs',
-      'events',
-      'dispatches',
-      'host',
+    nav.dataset.connected = String(!!id);
+    const groups = [
+      ['', ['overview', 'chat']],
+      ['运行观察', ['runs', 'events', 'dispatches']],
+      ['资源管理', ['agents', 'tools', 'plugins', 'oi', 'host']],
     ];
-    for (const section of sections) {
-      const b = button('', () => open(section), 'desk-nav-item');
-      const glyph = node('span', 'desk-glyph', symbol[section]);
-      glyph.setAttribute('aria-hidden', 'true');
-      b.append(glyph, node('span', '', label[section]));
-      b.dataset.section = section;
-      nav.append(b);
+    for (const [name, sections] of groups) {
+      const group = node('div', 'console-nav-group');
+      if (name) group.append(node('h2', 'section-label', name));
+      for (const section of sections) {
+        if (adminSections.has(section) && !id?.admin) continue;
+        const chat = section === 'chat';
+        const action = chat ? client.showChat : () => open(section, undefined, { root: true });
+        const b = button('', action, 'desk-nav-item');
+        b.dataset.section = section;
+        if (chat) b.id = 'nav-chats';
+        const glyph = node('span', 'desk-glyph');
+        glyph.setAttribute('aria-hidden', 'true');
+        b.append(glyph, node('span', '', chat ? '对话' : label[section]));
+        group.append(b);
+      }
+      nav.append(group);
     }
   }
   function field(name, title, value = '', type = 'text', options = {}) {
@@ -397,14 +397,21 @@ window.createLoomDesk = function createLoomDesk(client) {
   }
   async function open(section, id, options = {}) {
     if (!identity) {
+      client.recordView(section, id);
+      client.closeDrawer();
       client.signIn();
       return;
     }
-    if (!label[section]) return;
+    const forbidden = adminSections.has(section) && !identity.admin;
+    if (forbidden || !Object.hasOwn(views, section) || (detailSections.has(section) && !id)) {
+      return open('overview', undefined, { replace: true, root: true,
+        message: forbidden ? '此页面需要管理员身份。' : '找不到该管控台页面。' });
+    }
     const before = current;
     const refreshing = before?.section === section && before?.id === id;
     const restore = refreshing ? viewPosition() : options;
-    if (before && !options.replace && (before.section !== section || before.id !== id))
+    if (options.root) sequence = [];
+    else if (before && !options.replace && !refreshing)
       sequence.push({ ...before, ...viewPosition() });
     if (!before) {
       sequence = [];
@@ -414,6 +421,7 @@ window.createLoomDesk = function createLoomDesk(client) {
     reader = new AbortController();
     const turn = ++revision;
     current = { section, id };
+    client.recordView(section, id, options.replace || options.fromLocation);
     client.closeDrawer();
     document.body.classList.add('in-desk');
     panel.hidden = false;
@@ -427,6 +435,8 @@ window.createLoomDesk = function createLoomDesk(client) {
         eventDelivery: 'events',
         reply: 'events',
         session: 'runs',
+        sessions: 'chat',
+        agentTool: 'tools',
       }[section] || section;
     nav.querySelector('[data-section="' + parent + '"]')?.setAttribute('aria-current', 'page');
     byId('desk-back').hidden = !sequence.length && !id;
@@ -441,11 +451,11 @@ window.createLoomDesk = function createLoomDesk(client) {
       if (turn === revision) notice('正在读取…');
     }, 200);
     try {
-      const parts = await views[section](id);
+      const parts = await views[section](id, refreshing);
       if (turn !== revision) return;
       byId('desk-content').replaceChildren(...parts.filter(Boolean));
       content.inert = false;
-      notice('');
+      notice(options.message || '', !!options.message);
       restorePosition(restore);
       if (!options.replace && !refreshing) byId('desk-heading').focus({ preventScroll: true });
     } catch (e) {
@@ -461,14 +471,18 @@ window.createLoomDesk = function createLoomDesk(client) {
   byId('desk-back').addEventListener('click', () => {
     const prev = sequence.pop();
     if (prev) open(prev.section, prev.id, { ...prev, replace: true });
-    else if (current?.id) open(current.section, undefined, { replace: true });
+    else if (current?.id) {
+      const parent = { modelcall: 'runs', toolcall: 'runs', session: 'sessions',
+        eventDelivery: 'events', reply: 'events', agentTool: 'tools' }[current.section];
+      open(parent || current.section, undefined, { replace: true });
+    }
     else close();
   });
   byId('desk-refresh').addEventListener(
     'click',
     () => current && open(current.section, current.id, { replace: true, position: panel.scrollTop }),
   );
-  byId('desk-chat').addEventListener('click', close);
+  byId('desk-chat').addEventListener('click', client.showChat);
 
   const ident = (name = 'id', title = '标识', value = '') =>
     field(name, title, value, 'text', { required: true });
@@ -604,7 +618,7 @@ window.createLoomDesk = function createLoomDesk(client) {
     ]);
     return [
       controls(
-        button('与 Agent 对话', () => client.chat(id), 'desk-button primary'),
+        client.canChat(id) && button('与 Agent 对话', () => client.chat(id), 'desk-button primary'),
         button('编辑 Agent', () => editAgent(a)),
         button('绑定工具', () => bind(a)),
         creatorAction('请和我一起检查 Agent ' + id + ' 的用途与工具配置，先给出改进建议。'),
@@ -826,7 +840,7 @@ window.createLoomDesk = function createLoomDesk(client) {
       const prompt = members.includes(service.id + '.list_skills') ? '请使用 list_skills 列出这个主机上的 Skill，并说明各自的用途。'
         : members.includes(service.id + '.list_hosts') ? '请使用 list_hosts 查看已连接的主机和在线状态。'
           : '请介绍 ' + service.service + ' 工具集中你可以使用哪些工具。';
-      bound.forEach((a) => {
+      bound.filter((a) => client.canChat(a.id)).forEach((a) => {
         const chat = button('与' + (a.name || a.id) + '对话', () => client.draftWithAgent
           ? client.draftWithAgent(a.id, prompt) : client.chat(a.id), 'desk-link');
         chat.dataset.chatAgent = a.id;
@@ -1177,6 +1191,169 @@ window.createLoomDesk = function createLoomDesk(client) {
       stateTitle(r.status),
       move('runs', r.id),
     ]);
+  }
+
+  const sessionName = (s) => s.title || s.first_user_preview || '会话 ' + s.id.slice(-6);
+  function openSessionFromConsole(s) {
+    return client.listAgents().some((a) => a.id === s.agent_id && a.owner === identity.owner)
+      ? client.chat(s.agent_id, s.id) : open('session', s.id);
+  }
+  async function sessionsView() {
+    const sessions = await activeRead('sessions?include=preview');
+    return [list(sessions.slice().reverse(), (s) => [
+      sessionName(s), [s.agent_id, time(s.created_at)].filter(Boolean).join(' · '), '',
+      () => openSessionFromConsole(s),
+    ], '暂无会话')];
+  }
+
+  function overviewMetric(title, count, section, hint) {
+    const tile = button('', move(section), 'overview-metric');
+    const arrow = node('span', 'overview-arrow');
+    arrow.setAttribute('aria-hidden', 'true');
+    tile.append(node('span', 'overview-metric-label', title), arrow,
+      node('strong', 'overview-value', count ?? '—'));
+    if (hint) tile.append(node('small', 'overview-hint', hint));
+    return tile;
+  }
+
+  function overviewPanel(id, title, section, allLabel) {
+    const box = node('section', 'overview-panel');
+    box.id = id;
+    const head = node('div', 'overview-panel-head');
+    const heading = node('h3', '', title);
+    heading.id = id + '-heading';
+    box.setAttribute('aria-labelledby', heading.id);
+    const all = button('查看全部', move(section), 'overview-link');
+    all.setAttribute('aria-label', allLabel);
+    head.append(heading, all);
+    box.append(head);
+    return box;
+  }
+
+  function overviewAgents(agents) {
+    const panel = overviewPanel('overview-agents', 'Agent', 'agents', '查看全部 Agent');
+    const rows = node('div', 'overview-agent-list');
+    for (const a of agents.slice(0, 4)) {
+      const row = node('div', 'overview-agent');
+      const name = a.name || a.id;
+      const resource = button('', move('agents', a.id), 'overview-agent-resource');
+      resource.setAttribute('aria-label', '查看 Agent 配置 · ' + name);
+      const mark = node('span', 'overview-avatar', Array.from(name)[0].toUpperCase());
+      mark.setAttribute('aria-hidden', 'true');
+      const copy = node('span', 'overview-row-name');
+      const model = typeof a.model === 'string' ? a.model : a.model?.default;
+      const detail = a.owner !== identity.owner ? a.owner : model;
+      copy.append(node('strong', '', name), node('small', '', detail || a.id));
+      resource.append(mark, copy);
+      row.append(resource);
+      if (a.owner === identity.owner) {
+        const chat = button('对话', () => client.chat(a.id), 'overview-chat');
+        chat.setAttribute('aria-label', '与 ' + name + ' 对话');
+        row.append(chat);
+      }
+      rows.append(row);
+    }
+    if (!agents.length) rows.append(node('p', 'overview-empty', '当前账户还没有 Agent'));
+    panel.append(rows);
+    const actions = node('div', 'overview-agent-actions');
+    if (permitted('agents', 'post')) {
+      actions.append(button('创建 Agent', () => editAgent(), 'desk-button'));
+    }
+    if (client.hasCreator()) {
+      actions.append(creatorAction('请先和我确认要管理哪些 Agent 和工具，再检查当前的配置与权限。'));
+    }
+    panel.append(actions);
+    return panel;
+  }
+
+  async function overviewView(_, refreshing) {
+    const [activityRead, agentsRead] = await Promise.allSettled([
+      activeRead('console/overview'),
+      refreshing ? client.reloadAgents() : Promise.resolve(),
+    ]);
+    if (activityRead.status === 'rejected' && activityRead.reason.name === 'AbortError') {
+      throw activityRead.reason;
+    }
+    const agents = client.listAgents();
+    const names = new Map(agents.map((a) => [a.id, a.name || a.id]));
+    const snapshot = activityRead.status === 'fulfilled' ? activityRead.value : null;
+
+    const counts = snapshot?.run_counts;
+    const total = counts && Object.values(counts).reduce((a, b) => a + b, 0);
+    const activeStates = Object.entries(counts || {})
+      .filter(([status]) => !['completed', 'cancelled', 'failed'].includes(status))
+      .map(([status, count]) => count + ' ' + stateTitle(status))
+      .join(' · ');
+    const metrics = node('div', 'overview-metrics');
+    metrics.append(
+      overviewMetric('可见 Agent', agents.length, 'agents'),
+      overviewMetric('累计运行', total, 'runs', activeStates),
+      overviewMetric('会话总数', snapshot?.session_count, 'sessions'),
+    );
+
+    const agentPanel = overviewAgents(agents);
+    if (agentsRead.status === 'rejected') {
+      const warning = node('p', 'overview-error', 'Agent 列表刷新失败，显示上次读取的结果。');
+      warning.setAttribute('role', 'status');
+      agentPanel.append(warning);
+    }
+
+    if (!snapshot) {
+      const error = node('div', 'overview-error');
+      error.setAttribute('role', 'status');
+      const reason = activityRead.reason?.message;
+      error.append(node('span', '', '运行与会话读取失败' + (reason ? ' · ' + reason : '')),
+        button('重试', editThen('overview'), 'desk-button'));
+      return [metrics, error, agentPanel];
+    }
+
+    const runPanel = overviewPanel('overview-runs', '最近运行', 'runs', '查看全部运行');
+    const sessionPanel = overviewPanel('overview-sessions', '最近会话', 'sessions', '查看全部会话');
+    const clock = new Intl.DateTimeFormat('zh-CN', {
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    function timestamp(value) {
+      const date = node('time', 'overview-time');
+      if (!value) return date;
+      const parsed = new Date(typeof value === 'number' && value < 1e12 ? value * 1000 : value);
+      if (Number.isFinite(parsed.getTime())) {
+        date.dateTime = parsed.toISOString();
+        date.textContent = clock.format(parsed);
+        date.title = time(value);
+      }
+      return date;
+    }
+    const sessionTitles = new Map(snapshot.recent_sessions.map((s) => [s.id, s.title || s.first_user_preview]));
+    for (const run of snapshot.recent_runs) {
+      const row = button('', move('runs', run.id), 'overview-row overview-run');
+      row.dataset.runId = run.id;
+      const session = sessionTitles.get(run.session_id);
+      const context = session || (run.session_id && '…' + run.session_id.slice(-8));
+      row.title = ['运行 ' + run.id, context && '所属会话 · ' + (session || run.session_id)].filter(Boolean).join('\n');
+      const key = node('span', 'overview-row-name');
+      const name = node('span', 'overview-run-name');
+      name.append(node('strong', '', names.get(run.agent_id) || run.agent_id || '运行'),
+        node('small', 'overview-id', '#' + run.id.slice(-6)));
+      key.append(name, node('small', '', context ? '会话 · ' + context : run.id));
+      const state = node('span', 'overview-state', stateTitle(run.status));
+      state.dataset.status = run.status;
+      row.append(key, state, timestamp(run.created_at));
+      runPanel.append(row);
+    }
+    if (!snapshot.recent_runs.length) runPanel.append(node('p', 'overview-empty', '暂无运行记录'));
+
+    for (const s of snapshot.recent_sessions) {
+      const row = button('', () => openSessionFromConsole(s), 'overview-row overview-session');
+      row.dataset.sessionId = s.id;
+      const key = node('span', 'overview-row-name');
+      key.append(node('strong', '', sessionName(s)), node('small', '', names.get(s.agent_id) || s.agent_id));
+      row.append(key, timestamp(s.created_at));
+      sessionPanel.append(row);
+    }
+    if (!snapshot.recent_sessions.length) sessionPanel.append(node('p', 'overview-empty', '暂无会话'));
+    const activity = node('div', 'overview-activity');
+    activity.append(runPanel, sessionPanel);
+    return [metrics, agentPanel, activity];
   }
   function supplement(r, cancel = false) {
     const op = client.uid();
@@ -1536,7 +1713,7 @@ window.createLoomDesk = function createLoomDesk(client) {
         [field('at', '包含到第几条历史记录', items.length, 'number', { required: true })],
         async (v) => {
           const b = await call(path + '/branches', 'POST', { at: Number(v.at), idempotency_key: op });
-          await client.chat(b.agent_id, b.id);
+          await openSessionFromConsole(b);
         },
         '创建分支',
       );
@@ -1549,7 +1726,8 @@ window.createLoomDesk = function createLoomDesk(client) {
         ['分支来源', s.parent_session_id],
       ]),
       controls(
-        button('打开对话', () => client.chat(s.agent_id, s.id), 'desk-button primary'),
+        s.owner === identity.owner && client.canChat(s.agent_id) &&
+          button('打开对话', () => client.chat(s.agent_id, s.id), 'desk-button primary'),
         items.length && button('创建分支', branch),
         s.parent_session_id && link('父会话', 'session', s.parent_session_id),
       ),
@@ -1714,6 +1892,8 @@ window.createLoomDesk = function createLoomDesk(client) {
     ];
   }
   const views = {
+    overview: overviewView,
+    sessions: sessionsView,
     oi: oiView,
     agents: agentView,
     plugins: pluginsView,
@@ -1731,5 +1911,6 @@ window.createLoomDesk = function createLoomDesk(client) {
     host: hostView,
     reply: async (id) => [data('回复与交付状态', await activeRead('replies/' + eid(id)), true)],
   };
+  connect(null);
   return { reset, connect, open, close, imageBlock };
 };

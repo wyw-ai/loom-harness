@@ -11,6 +11,7 @@ mod delivery;
 mod dispatch;
 mod extensions;
 mod local_bus;
+mod overview;
 mod prompt;
 mod replies;
 mod stream;
@@ -178,6 +179,31 @@ fn user_preview(content: &Value) -> Option<String> {
     }
     (!preview.is_empty()).then_some(preview)
 }
+fn add_session_previews(c: &Connection, owner: &str, sessions: &mut [Value]) -> Result<()> {
+    let mut user_items = c.prepare(
+        "SELECT doc -> '$.content' FROM history WHERE owner=?1 AND session=?2
+         AND json_extract(doc,'$.role')='user'
+         AND coalesce(json_extract(doc,'$.event.source'),json_extract(doc,'$.event.source_id'),'user')='user'
+         AND json_type(doc,'$.content') IN ('text','array') ORDER BY seq",
+    )?;
+    for session in sessions {
+        if session["title"]
+            .as_str()
+            .is_some_and(|title| !title.trim().is_empty())
+        {
+            continue;
+        }
+        let mut items = user_items.query(params![owner, field(session, "id")?])?;
+        while let Some(item) = items.next()? {
+            let content = serde_json::from_str(&item.get::<_, String>(0)?)?;
+            if let Some(preview) = user_preview(&content) {
+                session["first_user_preview"] = json!(preview);
+                break;
+            }
+        }
+    }
+    Ok(())
+}
 fn append_history(
     c: &Connection,
     owner: &str,
@@ -256,6 +282,10 @@ impl Store {
             CREATE TABLE IF NOT EXISTS history(seq INTEGER PRIMARY KEY,owner TEXT NOT NULL,session TEXT NOT NULL,
               origin TEXT NOT NULL,doc TEXT NOT NULL,UNIQUE(owner,session,origin));
             CREATE INDEX IF NOT EXISTS history_session_order ON history(owner,session,seq);
+            CREATE INDEX IF NOT EXISTS console_recent_objects ON objects(owner,kind,seq)
+              WHERE kind='session' OR kind='run';
+            CREATE INDEX IF NOT EXISTS console_run_status ON objects(owner,json_extract(doc,'$.status'))
+              WHERE kind='run';
             CREATE TABLE IF NOT EXISTS workq(seq INTEGER PRIMARY KEY,run_id TEXT NOT NULL UNIQUE,owner TEXT NOT NULL,
               ready INTEGER NOT NULL DEFAULT 1,token TEXT,worker TEXT,expires INTEGER);
             CREATE INDEX IF NOT EXISTS work_ready ON workq(ready,expires,seq);
@@ -354,33 +384,14 @@ impl Store {
     }
     pub fn sessions_with_previews(&self, owner: &str, agent_id: Option<&str>) -> Result<Value> {
         self.read(|c| {
-            let mut sessions = c.prepare(
+            let mut sessions = fetch_many(
+                c,
                 "SELECT doc FROM objects WHERE owner=?1 AND kind='session'
-                 AND (?2 IS NULL OR json_extract(doc,'$.agent_id')=?2) ORDER BY seq"
+                 AND (?2 IS NULL OR json_extract(doc,'$.agent_id')=?2) ORDER BY seq",
+                params![owner, agent_id],
             )?;
-            let mut user_items = c.prepare(
-                "SELECT doc -> '$.content' FROM history WHERE owner=?1 AND session=?2
-                 AND json_extract(doc,'$.role')='user'
-                 AND coalesce(json_extract(doc,'$.event.source'),json_extract(doc,'$.event.source_id'),'user')='user'
-                 AND json_type(doc,'$.content') IN ('text','array') ORDER BY seq"
-            )?;
-            let mut rows = sessions.query(params![owner, agent_id])?;
-            let mut result = Vec::new();
-            while let Some(row) = rows.next()? {
-                let mut session: Value = serde_json::from_str(&row.get::<_, String>(0)?)?;
-                if session["title"].as_str().is_none_or(|title| title.trim().is_empty()) {
-                    let mut items = user_items.query(params![owner, field(&session, "id")?])?;
-                    while let Some(item) = items.next()? {
-                        let content = serde_json::from_str(&item.get::<_, String>(0)?)?;
-                        if let Some(preview) = user_preview(&content) {
-                            session["first_user_preview"] = json!(preview);
-                            break;
-                        }
-                    }
-                }
-                result.push(session);
-            }
-            Ok(Value::Array(result))
+            add_session_previews(c, owner, &mut sessions)?;
+            Ok(Value::Array(sessions))
         })
     }
     pub fn history(&self, owner: &str, sid: &str) -> Result<Value> {

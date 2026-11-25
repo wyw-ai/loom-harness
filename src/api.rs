@@ -143,6 +143,7 @@ async fn route(
         return Ok(v);
     }
     match (method, p) {
+        ("GET", ["console", "overview"]) => Ok(db.console_overview(o)?),
         ("GET", ["identity"]) => Ok(
             json!({"owner":o,"subject":who.subject.as_deref().unwrap_or(o),"admin":who.admin,"approve":who.approve,"source":who.source}),
         ),

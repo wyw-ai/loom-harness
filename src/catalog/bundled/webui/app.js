@@ -22,6 +22,7 @@
     if (thread) refreshUsage(thread);
   });
   let login = null;
+  let navigationVersion = 0;
   let disconnectedDrafts = null;
   const jump = element('button', 'chat-jump', '↓ 回到最新');
   jump.id = 'jump-latest';
@@ -36,10 +37,15 @@
   el('send').before(stop);
   const desk = window.createLoomDesk({
     uid,
+    recordChat: rememberChatLocation,
+    recordView: rememberDeskLocation,
+    showChat,
     request: (path, options) => request(account, path, options),
     signIn: showCredentials,
     closeDrawer: () => drawer(false),
-    currentAgent: () => workspace?.agent.id,
+    currentAgent: () => workspace?.agent.id || agentPicker.value,
+    listAgents: () => account?.agents || [],
+    canChat: agentId => !!account?.chatAgents.some(agent => agent.id === agentId),
     currentSession: () => thread?.session.id,
     hasCreator: () => !!creatorAgent(),
     draftWithAgent: draftWithAgent,
@@ -54,34 +60,48 @@
       if(account!==who)return;
       account.agents=agents;
       renderAgents();
-      if(workspace){agentPicker.value=workspace.agent.id;workspace.agent=agents.find(a=>a.id===workspace.agent.id)||workspace.agent;loadHints(workspace);}
+      if (workspace) {
+        const updated = account.chatAgents.find(a => a.id === workspace.agent.id);
+        if (updated) {
+          workspace.agent = updated;
+          agentPicker.value = updated.id;
+          loadHints(workspace);
+        } else {
+          stopWorkspace();
+          updateControls();
+          if (el('desk-panel').hidden) await unavailableChat('agent');
+        }
+      }
     },
     async chat(agentId, sessionId) {
-      desk.close();
-      await openAgent(agentId,sessionId);
-      prompt.focus();
+      await showChat({ agentId, sessionId });
     },
   });
   window.createLoomShell?.({
-    listAgents: () => account?.agents || [],
+    listAgents: () => account?.chatAgents || [],
     listHints: () => {
       const w=workspace;
       return w?.hints.map(hint=>({label:hint[1],action:()=>useHint(w,hint)})) || [];
     },
-    openAgent: id => { if (account) {desk.close(); drawer(false); return openAgent(id);} showCredentials(); },
+    openAgent: id => showChat({ agentId: id }),
+    openSession: (agentId, sessionId) => showChat({agentId, sessionId}),
+    async listSessions() {
+      const who = account, agent = agentPicker.value;
+      if (!who || !agent) return [];
+      const rows = workspace?.agent.id === agent && workspace.listed ? workspace.sessions :
+        (await request(who,'sessions?agent_id=' + pathId(agent) + '&include=preview')).reverse();
+      if (account !== who || agentPicker.value !== agent) return [];
+      return rows.filter(s => s.owner === who.identity.owner).map(s => ({id: s.id, agent, title: titleFor(s)}));
+    },
     listTools: async () => {
-      const w=workspace;
-      if (!w) return [];
-      const rows=await request(account,'agents/'+pathId(w.agent.id)+'/tools',{signal:w.controller.signal});
-      return workspace===w ? rows : [];
+      const who = account, agent = agentPicker.value;
+      if (!who || !agent) return [];
+      const rows = await request(who, 'agents/' + pathId(agent) + '/tools');
+      return account === who && agentPicker.value === agent ? rows : [];
     },
-    draft: text => { desk.close(); drawer(false); return putDraft(text); },
-    newChat: () => { desk.close(); drawer(false); return createSession(); },
-    openDesk: section => {
-      if (section === 'oi') return openOiLink();
-      if (account) desk.open(section);
-      else showCredentials();
-    },
+    draft: async (text, agentId) => { await showChat({agentId}); return putDraft(text); },
+    newChat,
+    openDesk: section => desk.open(section, undefined, { root: true }),
   });
 
   function creatorAgent() {
@@ -91,8 +111,8 @@
   }
 
   async function draftWithAgent(id,text) {
-    if (!account?.agents.some(agent=>agent.id===id)) throw new Error('此 Agent 不可用');
-    desk.close();
+    if (!account?.chatAgents.some(agent=>agent.id===id)) throw new Error('此 Agent 不可用');
+    desk.close({ silent: true });
     drawer(false);
     const w=await openAgent(id,null,true);
     if (w && workspace===w) putDraft(text);
@@ -220,6 +240,7 @@
   }
 
   function disconnect(keepDrafts = false) {
+    ++navigationVersion;
     desk.reset();
     stopWorkspace();
     account?.controller.abort();
@@ -229,7 +250,7 @@
     } else if (!keepDrafts) disconnectedDrafts = null;
     account = null;
     agentPicker.replaceChildren(new Option('请选择 Agent', ''));
-    history.replaceState(null, '', location.pathname + location.search);
+    if (!keepDrafts) history.replaceState(null, '', location.pathname + location.search);
     el('token-input').value = '';
     updateControls();
   }
@@ -246,9 +267,9 @@
     el('suggested-draft').hidden=!thread?.suggestion || !ready || !!prompt.value.trim();
     el('suggested-draft').textContent=thread?.suggestion||'';
     renderAttachment(options);
-    agentPicker.disabled = !account?.agents.length;
-    el('new-session').disabled = !!account && (!workspace?.listed || workspace.creating);
-    el('create-agent').hidden = !account || !!account.agents.length;
+    agentPicker.disabled = !account?.chatAgents.length;
+    el('new-session').disabled = !!account && (!account.chatAgents.length || !!workspace?.creating);
+    el('create-agent').hidden = !account || !!account.chatAgents.length;
     el('create-agent').disabled = !!account?.creating;
     el('logout').hidden = !account;
     el('connection-state').textContent = account ? account.identity.owner : '连接账户';
@@ -269,8 +290,8 @@
       workspace.listFailed ? '重新读取会话' : '新建会话';
     action.disabled = !!account?.creating || !!workspace?.creating;
     if (!thread) {
-      el('empty-title').textContent = '想一起处理什么？';
-      el('empty-description').textContent = !account ? '连接账户，选择你的 Agent。' :
+      el('empty-title').textContent = account ? '想一起处理什么？' : '连接云端工作区';
+      el('empty-description').textContent = !account ? '使用账户令牌管理 Agent、查看运行记录并开始对话。' :
         !workspace ? '创建一个标准 Agent，开始第一段对话。' : '';
     } else {
       el('empty-title').textContent = '想一起处理什么？';
@@ -279,10 +300,11 @@
   }
 
   function renderAgents() {
-    agentPicker.replaceChildren(...account.agents.map(a => new Option(
+    account.chatAgents = account.agents.filter(a => a.owner === account.identity.owner);
+    agentPicker.replaceChildren(...account.chatAgents.map(a => new Option(
       a.name && !['standard', 'creator', a.id].includes(a.name) ? a.name + ' · ' + a.id : a.id, a.id
     )));
-    if (!account.agents.length) agentPicker.add(new Option('暂无 Agent', ''));
+    if (!account.chatAgents.length) agentPicker.add(new Option('暂无 Agent', ''));
     updateControls();
   }
 
@@ -307,7 +329,7 @@
       button.type = 'button';
       button.title = titleFor(s);
       if (s.id === thread?.session.id) button.setAttribute('aria-current', 'true');
-      button.addEventListener('click', () => { desk.close(); drawer(false); openThread(s); });
+      button.addEventListener('click', () => showChat({agentId: workspace.agent.id, sessionId: s.id}));
       item.append(button);
       return item;
     }));
@@ -378,11 +400,12 @@
     }
   }
 
-  async function openAgent(agentId, preferredSession, blank = false) {
+  async function openAgent(agentId, preferredSession, blank = false, replaceLocation = false) {
+    const version = navigationVersion;
     stopWorkspace();
-    const agent = account.agents.find(a => a.id === agentId);
+    const agent = account.chatAgents.find(a => a.id === agentId);
     if (!agent) { updateControls(); return; }
-    const w = {agent, sessions: [], hints: [], hintCheck: 0, controller: new AbortController()};
+    const w = {agent, preferredSession, sessions: [], hints: [], hintCheck: 0, controller: new AbortController()};
     workspace = w;
     agentPicker.value = agent.id;
     prompt.value = account.emptyDrafts.get(agent.id) || '';
@@ -391,13 +414,19 @@
     try {
       const sessions = await request(account, 'sessions?agent_id=' + pathId(agent.id) + '&include=preview', {signal: w.controller.signal});
       if (w !== workspace) return;
-      w.sessions = sessions.reverse();
+      w.sessions = sessions.filter(s => s.owner === account.identity.owner).reverse();
+      if (preferredSession && !w.sessions.some(s => s.id === preferredSession)) {
+        stopWorkspace();
+        updateControls();
+        if (navigationVersion === version) await unavailableChat('session');
+        return;
+      }
       w.listed = true;
       renderSessions();
       const selected = preferredSession || account.lastSessions.get(agent.id);
       const initial = !blank && (w.sessions.find(s => s.id === selected) || w.sessions[0]);
-      if (initial) await openThread(initial);
-      else rememberChatLocation();
+      if (initial) await openThread(initial, replaceLocation);
+      else rememberChatLocation(replaceLocation);
       return w;
     } catch (e) {
       if (w === workspace) {
@@ -485,7 +514,7 @@
     }
   }
 
-  function openThread(session) {
+  function openThread(session, replaceLocation = false) {
     stopThread();
     const reading = account.reading.get(session.id);
     const t = {session, controller: new AbortController(), historyLength: 0, failures: 0, writes: 0,
@@ -494,7 +523,7 @@
     thread = t;
     meter.start();
     account.lastSessions.set(workspace.agent.id,session.id);
-    rememberChatLocation();
+    rememberChatLocation(replaceLocation);
     el('thread-title').textContent = sessionTitle(session) || '新会话';
     prompt.value = account.drafts.get(session.id) || '';
     renderSessions();
@@ -512,36 +541,91 @@
     return row;
   }
 
-  function oiRequested() {
-    return new URLSearchParams(location.hash.slice(1)).get('view') === 'oi';
+  function writeLocation(params, replace, chat) {
+    const hash = '#' + params.toString();
+    const method = replace || hash === location.hash ? 'replaceState' : 'pushState';
+    history[method]({chat}, '', hash);
   }
 
-  function rememberChatLocation() {
-    if (!el('desk-panel').hidden && oiRequested()) return;
-    if (!workspace) {
-      history.replaceState(null, '', location.pathname + location.search);
+  function rememberChatLocation(replace = false) {
+    if (!account || !el('desk-panel').hidden) return;
+    const params = new URLSearchParams();
+    if (workspace) {
+      params.set('agent', workspace.agent.id);
+      if (thread) params.set('session', thread.session.id);
+    } else params.set('view', 'chat');
+    writeLocation(params, replace);
+  }
+
+  function rememberDeskLocation(section, id, replace = false) {
+    ++navigationVersion;
+    const params = new URLSearchParams({view: section});
+    if (id) params.set('id', id);
+    const chat = workspace ? {agent: workspace.agent.id, session: thread?.session.id} : history.state?.chat;
+    writeLocation(params, replace, chat);
+  }
+
+  function unavailableChat(target) {
+    const message = target === 'agent'
+      ? '无法打开指定的 Agent。请从当前账户可对话的 Agent 中选择。'
+      : '无法打开指定的会话。请确认会话和 Agent 属于当前账户。';
+    return desk.open('overview', undefined, { root: true, replace: true, message });
+  }
+
+  async function showChat({agentId, sessionId, fromLocation = false} = {}) {
+    const version = ++navigationVersion;
+    drawer(false);
+    if (!account) {
+      rememberDeskLocation('chat');
+      showCredentials();
       return;
     }
-    const params = new URLSearchParams({agent: workspace.agent.id});
-    if (thread) params.set('session', thread.session.id);
-    history.replaceState(null, '', '#' + params);
-  }
-
-  function openOiLink() {
-    if (!account) { showCredentials(); return; }
-    if (!account.identity.admin) {
-      rememberChatLocation();
-      setStatus('OI 接入设置需要管理员身份。', 'error');
-      return;
+    const saved = history.state?.chat;
+    const id = agentId || workspace?.agent.id || saved?.agent;
+    const requested = account.chatAgents.find(a => a.id === id);
+    if (agentId && !requested) return unavailableChat('agent');
+    const agent = requested || account.chatAgents[0];
+    if (sessionId && !agent) return unavailableChat('session');
+    const session = sessionId || (!workspace && !agentId && agent?.id === saved?.agent && saved?.session);
+    desk.close({ silent: true });
+    if (agent && (workspace?.agent.id !== agent.id || !workspace?.listed)) {
+      await openAgent(agent.id, session, false, fromLocation);
+    } else if (session && thread?.session.id !== session) {
+      const target = workspace?.sessions.find(s => s.id === session);
+      if (target) await openThread(target, fromLocation);
+      else if (agent) await openAgent(agent.id, session, false, fromLocation);
     }
-    history.replaceState(null, '', '#view=oi');
-    desk.open('oi');
+    if (!el('desk-panel').hidden || navigationVersion !== version || workspace?.listFailed) return;
+    rememberChatLocation(fromLocation);
+    if (!prompt.disabled) prompt.focus({preventScroll: true});
+    else el('empty-action').focus({preventScroll: true});
   }
 
-  window.addEventListener('hashchange', () => { if (oiRequested()) openOiLink(); });
-  new MutationObserver(() => {
-    if (el('desk-panel').hidden && oiRequested() && account) rememberChatLocation();
-  }).observe(el('desk-panel'), {attributes:true, attributeFilter:['hidden']});
+  async function newChat() {
+    drawer(false);
+    if (!account) return showChat();
+    if (!account.chatAgents.length) return showChat();
+    const fromDesk = !el('desk-panel').hidden && location.hash;
+    const w = workspace?.listed ? workspace : await openAgent(agentPicker.value, null, true);
+    if (!w || w !== workspace || !w.listed || (fromDesk && location.hash !== fromDesk)) return;
+    desk.close({ silent: true });
+    await createSession();
+  }
+
+  function restoreLocation(params = new URLSearchParams(location.hash.slice(1))) {
+    if (!account) return;
+    const section = params.get('view') || (params.has('agent') ? 'chat' : 'overview');
+    if (section === 'chat') {
+      return showChat({agentId: params.get('agent'), sessionId: params.get('session'), fromLocation: true});
+    }
+    return desk.open(section, params.get('id') || undefined, { root: true, fromLocation: true });
+  }
+
+  window.addEventListener('hashchange', () => restoreLocation());
+  document.querySelector('.skip-link').addEventListener('click', event => {
+    event.preventDefault();
+    el('main-content').focus();
+  });
 
   async function copyReply(text, button) {
     try {
@@ -1095,12 +1179,7 @@
       login = null;
       dialog.close();
       renderAgents();
-      const agent = account.agents.find(a => a.id === preferred.get('agent')) || account.agents[0];
-      const loading = agent && openAgent(agent.id, preferred.get('session'));
-      if (preferred.get('view') === 'oi') {
-        if (!identity.admin) await loading;
-        if (account === candidate) openOiLink();
-      }
+      restoreLocation(preferred);
     } catch (e) {
       if (login === candidate) credentialsError(e.message);
     } finally {
@@ -1118,15 +1197,16 @@
   el('credential-close').addEventListener('click', () => dialog.close());
   el('connection-button').addEventListener('click', showCredentials);
   el('logout').addEventListener('click', () => { disconnect(); dialog.close(); });
-  el('new-session').addEventListener('click', () => { desk.close();createSession(); });
+  el('new-session').addEventListener('click', newChat);
+  el('console-home').addEventListener('click', () => desk.open('overview', undefined, { root: true }));
   el('create-agent').addEventListener('click', createAgent);
   el('empty-action').addEventListener('click', () => {
     if (!account) showCredentials();
     else if (!workspace) createAgent();
-    else if (workspace.listFailed) openAgent(workspace.agent.id);
+    else if (workspace.listFailed) openAgent(workspace.agent.id, workspace.preferredSession);
     else createSession();
   });
-  agentPicker.addEventListener('change', () => {desk.close();openAgent(agentPicker.value);});
+  agentPicker.addEventListener('change', () => showChat({agentId: agentPicker.value}));
   el('sidebar-toggle').addEventListener('click', () => drawer(!document.body.classList.contains('sidebar-open')));
   el('sidebar-close').addEventListener('click', () => drawer(false));
   el('sidebar-scrim').addEventListener('click', () => drawer(false));
@@ -1202,5 +1282,5 @@
   });
   drawer(false);
   updateControls();
-  if (oiRequested()) openOiLink();
+  if (new URLSearchParams(location.hash.slice(1)).get('view') === 'oi') showCredentials();
 })();

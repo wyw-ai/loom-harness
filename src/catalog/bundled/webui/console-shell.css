@@ -1,0 +1,130 @@
+/* The console and the chat share a shell; only the conversation context is local to chat. */
+:root {
+  --ink: #1d3037;
+  --muted: #5e717a;
+  --line: #dce4e6;
+  --soft: #f2f6f6;
+  --accent: #147d74;
+  --accent-ink: #116a61;
+  --accent-soft: #e5f3f0;
+  --side-width: 242px;
+}
+#sidebar {
+  --rail-text: #d7e3e5;
+  --rail-muted: #a1b6bb;
+  --rail-hover: #233c43;
+  --rail-edge: #344b52;
+  color: var(--rail-text);
+  background: #17292f;
+  border-right-color: #17292f;
+  padding-inline: 14px;
+  overflow: hidden;
+}
+#sidebar :focus-visible { outline-color: #8cdac7; outline-offset: -2px; }
+.brand { gap: 10px; height: 77px; padding: 0 3px; }
+.brand-tile {
+  display: grid; place-items: center; flex: none; width: 34px; height: 34px;
+  border: 1px solid #48716b; border-radius: 9px; background: #284a47;
+}
+.brand-tile .loom-mark { font-size: 21px; color: #b2e9d7; }
+.brand-word { display: grid; gap: 3px; font: 650 20px/1 Inter, "Segoe UI", sans-serif; letter-spacing: -.055em; color: #fcffff; }
+.brand-word span { font: 500 11px/1.1 Inter, "Segoe UI", sans-serif; letter-spacing: .035em; color: var(--rail-muted); }
+#sidebar .icon-button { color: var(--rail-muted); }
+#sidebar .icon-button:hover { background: var(--rail-hover); color: white; }
+.side-actions { display: grid; grid-template-columns: 1fr 34px; gap: 6px; margin-bottom: 15px; }
+#quick-open, #new-session {
+  height: 34px; min-height: 34px; border: 1px solid var(--rail-edge); border-radius: 7px;
+  background: #20343b; box-shadow: none;
+}
+#quick-open { gap: 9px; padding: 0 10px; color: #c2d3d6; font-size: 12px; }
+#quick-open kbd {
+  padding: 0 4px; border: 1px solid #4b6066; border-radius: 3px; font: 10px/16px ui-monospace, Consolas, monospace;
+}
+#new-session { justify-content: center; padding: 0; color: #a8e0d1; }
+#new-session:hover:enabled, #quick-open:hover, #connection-button:hover { background: var(--rail-hover); }
+.console-side-scroll {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding-bottom: 14px; scrollbar-width: thin; scrollbar-color: #475e63 transparent;
+}
+#desk-nav { display: grid; gap: 21px; }
+.console-nav-group { display: grid; gap: 2px; }
+#sidebar .section-label {
+  margin: 0; padding: 0 11px 7px; color: var(--rail-muted);
+  font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1.4; letter-spacing: .045em;
+}
+.desk-nav-item {
+  min-height: 35px; gap: 11px; padding: 6px 10px; border-radius: 6px; color: var(--rail-text);
+  font-weight: 450; font-size: 13px; line-height: 1.5;
+}
+.desk-nav-item:hover, .session-button:hover { background: var(--rail-hover); }
+.desk-nav-item[aria-current] {
+  background: #284842; box-shadow: inset 3px 0 #83d6b9; color: #d6f5e9; font-weight: 600;
+}
+.desk-glyph {
+  display: inline-block; position: relative; width: 16px; height: 16px; flex: none; color: #9cb4b8;
+}
+.desk-nav-item[aria-current] .desk-glyph { color: #91dbc3; }
+.desk-glyph::before, .desk-glyph::after { content: ""; position: absolute; box-sizing: border-box; }
+[data-section="overview"] .desk-glyph::before { inset: 1px auto auto 1px; width: 6px; height: 6px; border-radius: 1px; background: currentColor; box-shadow: 8px 0, 0 8px, 8px 8px; }
+[data-section="chat"] .desk-glyph::before { inset: 2px 1px 3px; border: 1.5px solid; border-radius: 4px; }
+[data-section="chat"] .desk-glyph::after { left: 3px; bottom: 1px; width: 5px; height: 4px; border-left: 1.5px solid; transform: skewY(-35deg); }
+[data-section="runs"] .desk-glyph::before { inset: 1px; border: 1.5px solid; border-radius: 50%; }
+[data-section="runs"] .desk-glyph::after { left: 6.5px; top: 5px; border-style: solid; border-width: 3px 0 3px 5px; border-color: transparent transparent transparent currentColor; }
+[data-section="events"] .desk-glyph::before { inset: 2px auto auto 1px; width: 3px; height: 2px; background: currentColor; box-shadow: 0 5px, 0 10px; }
+[data-section="events"] .desk-glyph::after { inset: 2px 1px auto 6px; height: 2px; background: currentColor; box-shadow: 0 5px, 0 10px; }
+[data-section="dispatches"] .desk-glyph::before { inset: 1px; border: 1.5px solid; border-radius: 50%; }
+[data-section="dispatches"] .desk-glyph::after { top: 4px; left: 7px; width: 5px; height: 5px; border: solid; border-width: 0 0 1.5px 1.5px; }
+[data-section="agents"] .desk-glyph::before { inset: 0 5px auto; height: 7px; border: 1.5px solid; border-radius: 50%; }
+[data-section="agents"] .desk-glyph::after { inset: 9px 1px 0; border: 1.5px solid; border-radius: 6px 6px 2px 2px; }
+[data-section="tools"] .desk-glyph::before { inset: 2px 1px 10px; border-block: 1.5px solid; }
+[data-section="tools"] .desk-glyph::after { inset: 8px 1px 1px; border: 1.5px solid; border-radius: 1px 1px 3px 3px; }
+[data-section="plugins"] .desk-glyph::before { inset: 5px 3px 4px; border: 1.5px solid; border-radius: 1px 1px 4px 4px; }
+[data-section="plugins"] .desk-glyph::after { left: 5px; top: 1px; width: 1.5px; height: 5px; background: currentColor; box-shadow: 4.5px 0, 2px 9px; }
+[data-section="oi"] .desk-glyph::before, [data-section="oi"] .desk-glyph::after { width: 6px; height: 10px; border: 1.5px solid; border-radius: 5px; transform: rotate(45deg); }
+[data-section="oi"] .desk-glyph::before { left: 3px; top: 6px; }
+[data-section="oi"] .desk-glyph::after { right: 3px; top: 0; }
+[data-section="host"] .desk-glyph::before, [data-section="host"] .desk-glyph::after { left: 1px; right: 1px; height: 6px; border: 1.5px solid; border-radius: 2px; }
+[data-section="host"] .desk-glyph::before { top: 1px; }
+[data-section="host"] .desk-glyph::after { bottom: 1px; }
+.agent-picker { margin-top: 18px; padding: 15px 1px 0; border-top: 1px solid var(--rail-edge); }
+.agent-picker .section-label { display: block; }
+#agent-select { border-color: var(--rail-edge); background: #21353c; color: var(--rail-text); font-size: 12px; }
+.select-wrap::after { border-color: var(--rail-muted); }
+#create-agent { color: #b0dfd2; }
+.history { margin-top: 16px; min-height: 0; overflow: visible; }
+#session-list { overflow: visible; padding: 0; }
+.session-button { color: #c8d7d9; min-height: 29px; font-size: 12px; padding: 4px 10px; }
+.session-button[aria-current=true] { color: #d8f5e9; background: var(--rail-hover); }
+.session-placeholder, #session-list:empty::after { color: var(--rail-muted); }
+.in-desk .agent-picker, .in-desk .history,
+#sidebar:has([data-connected="false"]) .agent-picker, #sidebar:has([data-connected="false"]) .history { display: none; }
+.sidebar-footer { margin-top: 0; padding: 10px 0 max(10px,env(safe-area-inset-bottom)); border-color: var(--rail-edge); }
+#connection-button { color: #e4efee; }
+.account-avatar { width: 29px; height: 29px; border-radius: 8px; color: #a8d9ca; background: #2a4748; }
+.account-more { color: var(--rail-muted); }
+.thread-header { min-height: 55px; gap: 11px; background: #fff; border-bottom: 1px solid var(--line); }
+#console-home { padding: 4px 0; border: 0; background: transparent; color: var(--muted); font-size: 13px; white-space: nowrap; }
+#console-home:hover { color: var(--accent-ink); text-decoration: underline; }
+.bar-divider { color: #acb9be; font-size: 13px; }
+#thread-title, .desk-bar-title { font-size: 13px; font-weight: 600; }
+.console-header-actions { display: none; }
+.in-desk .console-header-actions { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; }
+.console-header-actions button { min-height: 29px; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
+#desk-panel { background: #f7f9f9; padding-top: clamp(23px, 3.2vw, 43px); }
+.desk-location:has(#desk-back[hidden]) { display: none; }
+.desk-location { margin-bottom: 12px; }
+#desk-back { padding-left: 0; }
+#desk-heading { font-size: clamp(25px, 2.4vw, 34px); letter-spacing: -.035em; }
+.desk-button.primary, #send:enabled { background: var(--accent-ink); border-color: var(--accent-ink); }
+#send:hover:enabled { background: #0b554e; }
+.message-user .message-content { background: #edf4f3; }
+#main-content:focus { outline: none; }
+body:has(#desk-nav[data-connected="false"]) .composer-area { display: none; }
+body:has(#desk-nav[data-connected="false"]) #conversation-scroll { flex: 1; justify-content: center; padding-bottom: 8vh; }
+body:has(#desk-nav[data-connected="false"]) #empty-state { max-width: 560px; }
+@media (max-width:720px) {
+  .brand { height: 66px; }
+  .thread-header { padding-inline: 12px; gap: 7px; }
+  .console-header-actions { gap: 4px; }
+  #desk-panel { padding-top: 23px; }
+}
